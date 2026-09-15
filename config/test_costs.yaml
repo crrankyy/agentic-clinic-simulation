@@ -1,0 +1,46 @@
+# ILLUSTRATIVE test prices in USD. NOT a real fee schedule (Q-13).
+#
+# These exist so the cost-steward has something to reason about and so relative
+# comparisons between runs are meaningful. Absolute figures mean nothing and
+# must never be quoted as real healthcare costs.
+#
+# Unknown tests are priced at the MEDIAN of this table (Q-13): zero would make
+# unmatched tests free and invite the doctor to order them; a penalty would
+# punish the doctor for the dataset's key naming.
+
+default: median                   # resolved at load from the values below
+
+prices:
+  Complete_Blood_Count: 25
+  Basic_Metabolic_Panel: 30
+  Comprehensive_Metabolic_Panel: 45
+  Liver_Function_Tests: 35
+  Thyroid_Function_Tests: 55
+  Coagulation_Profile: 40
+  Serum_Electrolytes: 25
+  Blood_Glucose: 10
+  Lipid_Panel: 30
+  Urinalysis: 15
+  Urine_Toxicology: 65
+  Blood_Cultures: 70
+  Peripheral_Blood_Smear: 40
+  Arterial_Blood_Gas: 60
+  Inflammatory_Markers: 45
+  ECG: 50
+  Echocardiogram: 400
+  Chest_X-ray: 100
+  Abdominal_X-ray: 110
+  CT_Scan: 800
+  MRI: 1400
+  Ultrasound: 250
+  Doppler_Ultrasound: 350
+  Skin_Biopsy: 300
+  Biopsy: 550
+  Bone_Marrow_Aspirate: 900
+  Lumbar_Puncture: 450
+  Electromyography: 500
+  Pulmonary_Function_Tests: 220
+  Audiometry: 90
+  Genetic_Testing: 1200
+  Endoscopy: 900
+  Colonoscopy: 1100

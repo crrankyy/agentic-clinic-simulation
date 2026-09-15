@@ -1,36 +1,45 @@
 [project]
 name = "agentclinic"
-version = "0.0.0"
+version = "0.1.0"
 description = "A from-scratch AgentClinic-style clinical encounter simulation (LangGraph + OpenRouter)"
 readme = "README.md"
-# D-007: the system Python is 3.14, which is ahead of much of the
-# LangChain/LangGraph wheel ecosystem. uv manages its own 3.12 interpreter.
+# D-007: the system Python is 3.14, ahead of much of the LangChain/LangGraph
+# wheel ecosystem. uv manages its own 3.12 interpreter.
 requires-python = ">=3.12,<3.13"
 
-# Phase 0 only needs an HTTP client. The *final* dependency list (langgraph,
-# langchain-core, pydantic, pyyaml, rich, a CLI library, ...) is still an open
-# question -- see docs/DECISIONS_OPEN.md. Exact versions are pinned by uv.lock.
+# Q-35 (D-019), amended by D-034 (rapidfuzz dropped with the fuzzy tier) and
+# D-021 (anthropic added for the judge). Exact versions are pinned by uv.lock.
 dependencies = [
+    "langgraph>=0.2,<1",
+    "langchain-core>=0.3,<1",
+    "langchain-openai>=0.2,<1",
+    "anthropic>=0.40",
+    "pydantic>=2.9,<3",
     "httpx>=0.28,<0.29",
+    "pyyaml>=6,<7",
+    "rich>=13,<15",
+    "typer>=0.12,<1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<2",
+    "respx>=0.21,<1",
 ]
 
-[tool.uv]
-# No src/agentclinic package exists yet (D-008: directories are created only
-# when a phase needs them), so there is nothing to build or install. Flipped to
-# a real package in Phase 1.
-package = false
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentclinic"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# scripts/ is not a package; this lets tests import download_dataset directly.
-pythonpath = ["scripts"]
+pythonpath = ["scripts"]        # scripts/ is not a package
+asyncio_mode = "auto"
 markers = [
     "live: touches a real network API; deselected by default (brief Section 11)",
 ]
-# Brief Section 11: tests calling real APIs are skipped unless asked for.
 addopts = "-m 'not live' --strict-markers"

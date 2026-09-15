@@ -1,0 +1,26 @@
+# Stop conditions, budgets and pacing. Values from docs/DECISIONS.md.
+
+encounter:
+  max_turns: 20                   # Q-24; --max-turns 10 for development
+  # Q-27: derived in code as max_turns * 6 + 20, never a bare constant, so the
+  # recursion backstop cannot drift away from the real stop condition.
+  recursion_limit_multiplier: 6
+  recursion_limit_headroom: 20
+  # Q-26: there is deliberately NO confidence-threshold stop rule. It would
+  # truncate exactly the high-confidence cases the calibration analysis needs.
+
+spend:
+  per_case_usd: 0.50              # Q-25, tested against spend_usd only
+  per_run_usd: 25.0
+  # test_cost_usd is a SIMULATED metric and is never compared against these.
+
+requests:
+  rate_per_minute: 18             # D-023: 18 leaves headroom under the 20/min cap
+  per_day: 1000                   # D-023, with >= $10 of credits purchased
+  concurrency: 4                  # shares the bucket; the cap is per-account
+
+retries:
+  attempts: 3                     # Q-08
+  backoff_seconds: [1, 2, 4]
+  timeout_seconds: 120
+  # Retried: 429, 500, 502, 503, 504, connect/read timeouts. NOT 4xx otherwise.
