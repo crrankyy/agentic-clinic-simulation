@@ -92,7 +92,11 @@ def make_hypothesis_node(caller: Any, case_id: str, config_dir: Path | None = No
         findings = list(update.findings)
         # `tests_ordered` is mechanical and safe: these are the doctor's OWN
         # requests, which it already knows it made. No result text is included.
-        tests = [e.text for e in log if e.kind in {"test", "exam"} and e.actor == "doctor"]
+        # The "no result" marker is safe for the same reason -- it states that
+        # the case holds nothing under that request, never what it does hold.
+        tests = [e.text + ("  [no result: not in this case]"
+                           if e.meta.get("unlisted") == "True" else "")
+                 for e in log if e.kind in {"test", "exam"} and e.actor == "doctor"]
 
         events: list[Event] = []
         turn = int(state.get("turn", 0))

@@ -39,7 +39,18 @@ MatchTier = Literal["exact", "contains", "synonym", "leaf",
 
 Domain = Literal["tests", "exams"]
 
-UNAVAILABLE = "Not available for this patient."
+#: The refusal must distinguish "this case has no such result" from "you worded
+#: the request badly", because to the doctor those are otherwise identical. In
+#: the first live web run the doctor asked for a CSF JC virus PCR, was told
+#: "Not available for this patient.", and re-asked the same test reworded on the
+#: next turn -- spending 2 of its 8 turns to learn nothing. It says nothing
+#: about *what* the case does hold: naming the key space would hand over a hint
+#: the real task never gives, and on a single-test case that is close to naming
+#: the answer.
+UNAVAILABLE = (
+    "Not available for this patient. This investigation is not part of the case "
+    "record at all, so rewording the request will not retrieve it."
+)
 
 
 def tokens(text: str) -> frozenset[str]:

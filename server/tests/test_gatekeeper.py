@@ -178,3 +178,23 @@ async def test_an_unrelated_request_still_does_not_match(store, costs, by_line):
     """Containment must not become a way to match everything."""
     r = await gk(store, costs, by_line[10].case_id).respond("positron emission tomography")
     assert r.unlisted
+
+
+async def test_the_refusal_says_the_case_lacks_it_not_merely_that_it_is_unavailable(cases):
+    """A refusal the doctor can act on.
+
+    "Not available for this patient." reads equally as "you worded that badly",
+    so the rational move is to reword -- which is what the doctor did in the
+    first live web run, twice, for nothing. The refusal must close that door
+    without naming what the case *does* hold.
+    """
+    store = CaseStore(cases)
+    gk = Gatekeeper(store.gatekeeper_view("medqa-0002"), load_test_costs())
+    reply = await gk.respond("CSF analysis for JC virus PCR")
+
+    assert reply.unlisted and reply.tier == "unmatched"
+    assert "not part of the case record" in reply.text
+    assert "rewording" in reply.text.lower()
+    # And it must not disclose the key space: medqa-0002 holds exactly one test,
+    # so naming it would come close to naming the diagnosis.
+    assert "MRI" not in reply.text and "mri_brain" not in reply.text.lower()

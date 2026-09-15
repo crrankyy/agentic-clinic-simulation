@@ -1043,3 +1043,38 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
   to LLM-call approximation only for runs recorded before this.
 - **Reason:** the feature forced the decision that was open. It also closes
   D-050's gap: a run's behaviour telemetry no longer dies with `results.csv`.
+
+## D-055 — An unavailable test says so, in the refusal and in the summary (amends Q-12)
+
+- **Date:** 2026-09-16
+- **Question:** Watching the first live web run, the doctor ordered a CSF JC
+  virus PCR on `medqa-0002`, was told "Not available for this patient.", and
+  re-asked the same test reworded on the next turn. It spent 2 of its 8 turns
+  and $180 simulated to learn nothing, and the encounter then ended on
+  `turn_cap` rather than on the doctor finalizing.
+- **Cause, in two parts:**
+  1. The refusal read equally as *"you worded that badly"*, so rewording was the
+     rational response. `medqa-0002` holds exactly one test (`MRI_Brain`); the
+     gatekeeper was correct, its message was not informative.
+  2. Worse, the orchestrator could not see the refusal at all.
+     `summary.tests_ordered` is built from the doctor's own request strings with
+     no outcome attached, so a refused order and a fulfilled one render as
+     identical lines. The refusal text reaches the orchestrator only if the
+     hypothesis model paraphrases it into `findings` — in the observed run it
+     did not.
+- **Options:** (a) leave it; (b) clarify the refusal text; (c) disclose the
+  case's key space on a miss.
+- **Decision:** (b), **plus** a mechanical `[no result: not in this case]`
+  marker on the request in `summary.tests_ordered`. Q-12 otherwise stands: an
+  unlisted test still charges `unknown_price`.
+- **Why not (c):** naming what the case holds hands over a hint the real task
+  never gives, and on a single-test case it is close to naming the answer.
+- **Why (b) alone was not enough:** a refusal the decision-maker never reads
+  changes nothing. This was only visible because the viewer showed the
+  transcript the orchestrator does *not* see beside the summary it does.
+- **Isolation:** the marker is safe for the same reason `tests_ordered` is —
+  it states that the case holds nothing under the doctor's own request, never
+  what it does hold. No result text crosses.
+- **Tests:** `test_the_refusal_says_the_case_lacks_it_not_merely_that_it_is_unavailable`
+  and `test_an_unavailable_test_is_marked_in_the_summary_the_orchestrator_reads`,
+  the latter verified to fail against the pre-fix summary.

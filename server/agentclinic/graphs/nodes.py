@@ -51,7 +51,13 @@ def make_gatekeeper_node(gatekeeper: Gatekeeper, domain: str, kind: str) -> Call
         turn = int(state.get("turn", 0)) + 1
         reply = await gatekeeper.respond(request, domain)  # type: ignore[arg-type]
         events = [
-            Event(turn=turn, kind=kind, actor="doctor", text=request),
+            # The doctor's own request carries whether it yielded anything. The
+            # summary is built from these, and without the marker an unavailable
+            # test is indistinguishable there from one that returned a result --
+            # so the orchestrator reads three identical lines and re-orders what
+            # it cannot have.
+            Event(turn=turn, kind=kind, actor="doctor", text=request,
+                  meta={"unlisted": str(reply.unlisted)}),
             Event(turn=turn, kind=kind, actor="gatekeeper", text=reply.text,
                   meta={"tier": reply.tier, "key": str(reply.key),
                         "request": request[:120],

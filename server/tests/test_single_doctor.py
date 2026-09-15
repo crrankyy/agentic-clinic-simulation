@@ -191,3 +191,36 @@ async def test_budget_breach_inside_finalize_still_produces_an_answer(cases, tmp
     assert out["final"].abstain is False, "a differential existed, so no abstention"
     assert out["final"].diagnosis == "Endometritis"
     assert "Forced finalize" in out["final"].rationale
+
+
+async def test_an_unavailable_test_is_marked_in_the_summary_the_orchestrator_reads(cases):
+    """The orchestrator must be able to tell a refused order from a fulfilled one.
+
+    `tests_ordered` lists the doctor's own request strings. Unmarked, a test the
+    case does not contain reads exactly like one that returned a result, so the
+    orchestrator re-orders what it cannot have -- observed live on medqa-0002,
+    where the doctor spent 2 of 8 turns re-asking for a CSF JC virus PCR.
+
+    The refusal *text* alone does not fix this: it reaches the orchestrator only
+    if the hypothesis model chooses to paraphrase it into `findings`, and in the
+    observed run it did not.
+    """
+    script = [HYP, decide("order_test", "CSF JC virus PCR"),
+              HYP, decide("order_test", "MRI brain with contrast"),
+              HYP, decide("finalize"), FINAL]
+    graph, model, store = build(cases, script, case_id="medqa-0002", max_turns=6)
+    await graph.ainvoke(
+        new_state("medqa-0002", store.doctor_view("medqa-0002").objective_for_doctor),
+        {"recursion_limit": 100})
+
+    prompts = [p for p in model.rendered_prompts if "Choose exactly one action" in p]
+    after = [p for p in prompts if "CSF JC virus PCR" in p]
+    assert after, "the request never reached the summary at all"
+    assert "[no result: not in this case]" in after[0], (
+        "an unavailable test is indistinguishable from a fulfilled one"
+    )
+    # The test that *did* resolve must not be marked.
+    got = [p for p in prompts if "MRI brain with contrast" in p]
+    assert got, "the fulfilled request never reached the summary"
+    mri_line = [ln for ln in got[-1].splitlines() if "MRI brain with contrast" in ln][0]
+    assert "[no result" not in mri_line, mri_line
