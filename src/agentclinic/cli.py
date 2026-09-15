@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -77,6 +78,98 @@ def config() -> None:
     t.add_row("requests", f"{b.rate_per_minute}/min  {b.requests_per_day}/day  x{b.concurrency}")
     t.add_row("unknown test price", f"${c.unknown_price}")
     console.print(t)
+
+
+@app.command()
+def play(
+    case_id: str = typer.Argument(..., help="e.g. medqa-0002"),
+    max_turns: int = typer.Option(20, help="turn cap for this encounter"),
+    stub_patient: bool = typer.Option(
+        False, "--stub-patient",
+        help="Use a canned patient instead of a model (no OPENROUTER_API_KEY needed).",
+    ),
+) -> None:
+    """Play the doctor against a real case, driving the real state machine."""
+    import asyncio
+
+    from langgraph.types import Command
+
+    from .agents.gatekeeper import Gatekeeper
+    from .agents.patient import Patient, PatientReply
+    from .config import load_models, load_test_costs
+    from .data.views import CaseStore
+    from .graphs.interactive import INTERACTIVE_ACTIONS, build_interactive_graph
+    from .graphs.state import new_state
+
+    store = CaseStore(load_cases(DATASET))
+    if case_id not in store.case_ids():
+        console.print(f"[red]unknown case {case_id}[/red]")
+        raise typer.Exit(1)
+
+    class StubPatient:
+        async def answer(self, question: str, *, case_id: str) -> PatientReply:
+            return PatientReply(
+                reply="(stub patient: run without --stub-patient for real answers)",
+                unknown=True,
+            )
+
+    if stub_patient:
+        patient: Any = StubPatient()
+    else:
+        from .llm.openrouter import LLMCaller, UsageRecorder, build_chat_model
+
+        models = load_models()
+        recorder = UsageRecorder()
+        model = build_chat_model(
+            model=models.for_role("patient"),
+            pin_provider=models.provider.pin,
+            allow_fallbacks=models.provider.allow_fallbacks,
+            attribution_title=models.provider.attribution_title,
+        ).with_config(callbacks=[recorder])
+        patient = Patient(store.patient_view(case_id), LLMCaller(model, recorder=recorder))
+
+    graph = build_interactive_graph(
+        patient=patient,
+        gatekeeper=Gatekeeper(store.gatekeeper_view(case_id), load_test_costs()),
+        max_turns=max_turns,
+        case_id=case_id,
+    )
+    cfg = {"configurable": {"thread_id": f"play-{case_id}"}}
+    view = store.doctor_view(case_id)
+
+    console.print(Panel(view.objective_for_doctor, title=f"Objective — {case_id}",
+                        border_style="cyan"))
+    console.print("[dim]actions: ask <question> | exam <region> | test <name> | "
+                  "finalize | quit[/dim]\n")
+
+    async def run() -> None:
+        await graph.ainvoke(new_state(case_id, view.objective_for_doctor), cfg)
+        shown = 1
+        while True:
+            state = (await graph.aget_state(cfg)).values
+            for event in state["encounter_log"][shown:]:
+                colour = {"patient": "green", "gatekeeper": "magenta"}.get(event.actor, "white")
+                console.print(f"[{colour}]{event.actor}[/{colour}] {event.text}")
+            shown = len(state["encounter_log"])
+
+            if state.get("stop_reason"):
+                console.print(f"\n[bold]encounter ended:[/bold] {state['stop_reason']} "
+                              f"after {state['turn']} turns, "
+                              f"simulated test cost ${state['test_cost_usd']:.2f}")
+                return
+
+            raw = console.input(f"[bold]turn {state['turn'] + 1}>[/bold] ").strip()
+            if not raw or raw == "quit":
+                return
+            verb, _, argument = raw.partition(" ")
+            action = {"ask": "ask_patient", "exam": "request_exam",
+                      "test": "order_test", "finalize": "finalize"}.get(verb)
+            if action is None or (action not in INTERACTIVE_ACTIONS and action != "finalize"):
+                console.print("[yellow]use: ask / exam / test / finalize / quit[/yellow]")
+                continue
+            await graph.ainvoke(Command(resume={"action": action, "argument": argument}), cfg)
+
+    asyncio.run(run())
 
 
 @app.command()

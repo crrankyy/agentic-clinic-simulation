@@ -1,0 +1,56 @@
+# Curated synonyms for gatekeeper tier 2 (Q-11, D-034).
+#
+# Tier 1 is exact matching on normalised keys; this table is tier 2; tier 3 is
+# an LLM over key names only. The fuzzy tier was dropped (D-034) because its
+# threshold had no value, no labelled tuning set, and no objective that did not
+# trade match rate against wrong-key matches -- and a wrong-key match hands the
+# doctor results it never ordered, which brief 5.2 forbids.
+#
+# Entries are grounded in the real key inventory: 234 distinct top-level
+# Test_Results keys across 214 cases, 165 of them appearing exactly once.
+# Keys and aliases are normalised (casefold, underscores -> spaces) before use,
+# so "Chest_X-ray" and "Chest_X-Ray" need no entry.
+
+tests:
+  complete blood count: [cbc, full blood count, fbc, blood count, haemogram, hemogram]
+  basic metabolic panel: [bmp, chem 7, basic chemistry]
+  comprehensive metabolic panel: [cmp, chem 14, metabolic panel]
+  liver function tests: [lft, lfts, liver panel, hepatic panel, liver enzymes]
+  thyroid function tests: [tft, tfts, thyroid panel, tsh, thyroid studies]
+  coagulation profile: [coags, clotting screen, pt inr, inr, aptt]
+  serum electrolytes: [electrolytes, u and e, ues, sodium potassium]
+  blood glucose: [glucose, blood sugar, bm, random glucose, fasting glucose]
+  lipid panel: [lipids, cholesterol, lipid profile]
+  urinalysis: [ua, urine dip, urine analysis, urine tests, urine dipstick]
+  blood cultures: [cultures, blood culture]
+  peripheral blood smear: [blood film, peripheral smear, smear]
+  arterial blood gas: [abg, blood gas, gas]
+  inflammatory markers: [crp, esr, c reactive protein]
+  electrocardiogram: [ecg, ekg, 12 lead, cardiac tracing]
+  echocardiogram: [echo, cardiac echo, transthoracic echocardiogram, tte]
+  chest x-ray: [cxr, chest radiograph, chest film, chest xray]
+  abdominal x-ray: [axr, abdominal film, abdominal radiograph]
+  ct scan: [ct, cat scan, computed tomography]
+  mri: [magnetic resonance imaging, mr scan]
+  ultrasound: [us, sonogram, sonography, uss]
+  skin biopsy: [punch biopsy, dermatologic biopsy]
+  bone marrow aspirate: [bone marrow, marrow aspirate, bone marrow biopsy]
+  lumbar puncture: [lp, spinal tap, csf, csf analysis]
+  electromyography: [emg, nerve conduction, nerve conduction study]
+  pulmonary function tests: [pft, pfts, spirometry, lung function]
+  audiometry: [hearing test, audiogram, audiological examination]
+  toxicology screen: [tox screen, drug screen, urine toxicology]
+  imaging: [scan, radiology, films]
+
+exams:
+  vital signs: [vitals, obs, observations, vital sign]
+  cardiovascular examination: [cardiac examination, heart exam, cvs, precordium]
+  respiratory examination: [chest examination, lung examination, pulmonary examination, resp exam]
+  abdominal examination: [abdomen, abdo exam, belly exam]
+  neurological examination: [neurologic examination, neuro exam, cranial nerves]
+  skin examination: [dermatological examination, dermatologic examination, skin, derm exam]
+  musculoskeletal examination: [msk exam, joint examination, joints]
+  general examination: [general appearance, general inspection, appearance]
+  head and neck examination: [neck examination, ent examination, head and neck]
+  ophthalmic examination: [eye examination, ophthalmologic examination, fundoscopy]
+  mental status examination: [mental state examination, mse, cognitive examination]
