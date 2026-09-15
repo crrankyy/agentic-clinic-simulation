@@ -113,10 +113,10 @@ STATE_SOURCES: dict[str, tuple[str, ...]] = {
                       "search_literature", "absorb_panel", "challenger_final",
                       "check_stop", "finalize"),
     "panel_events": ("doctor_panel", "absorb_panel"),
-    "challenger_opinion": ("challenger", "challenger_final", "ask_patient", "request_exam",
-                           "order_test", "search_literature"),
-    "cost_objection": ("cost_steward", "ask_patient", "request_exam", "order_test",
-                       "search_literature"),
+    # The orchestrator clears both after rendering them into its prompt, which is
+    # what makes an opinion one-shot. Action nodes must NOT clear them.
+    "challenger_opinion": ("challenger", "challenger_final", "orchestrator"),
+    "cost_objection": ("cost_steward", "orchestrator"),
     "summary": ("hypothesis",),
     "differential": ("hypothesis",),
     "red_flags": ("hypothesis",),

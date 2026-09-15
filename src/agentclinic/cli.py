@@ -187,6 +187,7 @@ def play(
 
 @app.command()
 def run(
+    config: str = typer.Option("single_doctor", help="single_doctor or panel"),
     split: str = typer.Option("dev", help="dev or heldout (heldout needs the explicit flag)"),
     limit: int = typer.Option(3, help="number of cases; the fixed subset is 3 (D-022)"),
     max_turns: int = typer.Option(20),
@@ -207,6 +208,7 @@ def run(
     from .eval.report import RunMetadata, render, write_report
     from .eval.runner import run_evaluation, write_finals, write_results_csv
     from .graphs.schemas import make_orchestrator_decision
+    from .graphs.encounter import build_encounter_graph
     from .graphs.single_doctor import build_single_doctor_graph
     from .llm.guards import DailyRequestCounter, RunGuards, SpendTracker, TokenBucket
     from .llm.openrouter import (
@@ -219,12 +221,17 @@ def run(
 
     # Q-34: the cache is hard-disabled for any run that writes a report. This is
     # an assertion, not a flag default, so it cannot be turned off by accident.
+    if config not in {"single_doctor", "panel"}:
+        console.print(f"[red]unknown config {config!r}: use single_doctor or panel[/red]")
+        raise typer.Exit(2)
     if cache and not no_report:
         console.print("[red]--cache requires --no-report: a reported run must not "
                       "replay cached completions.[/red]")
         raise typer.Exit(2)
 
-    models, budgets, costs = load_models(), load_budgets(max_turns=max_turns), load_test_costs()
+    models = load_models()
+    budgets = load_budgets(max_turns=max_turns, graph=config)
+    costs = load_test_costs()
     cases = load_cases(DATASET)
     store = CaseStore(cases)
 
@@ -240,7 +247,7 @@ def run(
     selected = [c for c in cases if c.case_id in set(subset)]
     console.print(f"cases: {[c.case_id for c in selected]}")
 
-    run_id = f"{split}-single_doctor-{uuid.uuid4().hex[:8]}"
+    run_id = f"{split}-{config}-{uuid.uuid4().hex[:8]}"
     run_dir = ROOT / "runs" / run_id
     tracer = Tracer(run_dir=run_dir)
 
@@ -256,7 +263,12 @@ def run(
     # plus a finalize. Refusing up front is far better than discovering the cap
     # mid-run, where a daily-cap 429 turns every remaining case into an `error`
     # and silently shrinks the accuracy denominator.
-    projected = len(selected) * (max_turns * 3 + 2)
+    # Worst case, measured on a scripted model: single_doctor 41 calls at 20
+    # turns; panel 127 when every turn orders a test AND is re-deliberated. An
+    # under-projection defeats the guard entirely, so this projects the worst
+    # case rather than the typical one.
+    per_turn = 7 if config == "panel" else 3
+    projected = len(selected) * (max_turns * per_turn + 3)
     console.print(f"daily requests remaining: {remaining}  projected: ~{projected}")
     if projected > remaining:
         console.print(
@@ -292,18 +304,21 @@ def run(
                   require_subscription=models.judge.auth == "subscription")
 
     def build_graph(case_id: str) -> Any:
-        return build_single_doctor_graph(
+        shared = dict(
             caller=caller,
             patient=Patient(store.patient_view(case_id), caller),
             gatekeeper=Gatekeeper(
                 store.gatekeeper_view(case_id), costs,
-                # Without this the cascade stops at exact + synonyms, and every
-                # other request becomes a fabricated "not available".
+                # Without this the cascade stops at exact/contains/synonyms, and
+                # anything else becomes a fabricated "not available".
                 llm_disambiguate=make_llm_disambiguator(caller, case_id),
             ),
             case_id=case_id, decision_model=decision_model, enabled=enabled,
             max_turns=budgets.max_turns, guards=guards,
         )
+        if config == "panel":
+            return build_encounter_graph(costs=costs, **shared)
+        return build_single_doctor_graph(**shared)
 
     finals: dict[str, Any] = {}
     results = asyncio.run(run_evaluation(
@@ -326,7 +341,7 @@ def run(
         return
 
     meta = RunMetadata(
-        run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
+        run_id=run_id, config_name=config, model=models.for_role("orchestrator"),
         judge_model=("manual (hand-assigned, not a model)" if manual
                      else models.judge.model),
         provider_pin=",".join(models.provider.pin),
@@ -460,8 +475,13 @@ def judge(
         return out
 
     results = asyncio.run(main())
+    # The run id encodes the configuration (`dev-panel-abc123`). Reading it back
+    # avoids referring to the module-level `config` command, which is what the
+    # bare name resolves to in this scope.
+    parts = run_id.split("-")
+    config_name = parts[1] if len(parts) > 2 else "single_doctor"
     meta = RunMetadata(
-        run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
+        run_id=run_id, config_name=config_name, model=models.for_role("orchestrator"),
         judge_model=("manual (hand-assigned, not a model)" if manual
                      else models.judge.model),
         provider_pin=",".join(models.provider.pin),

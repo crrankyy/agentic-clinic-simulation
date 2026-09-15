@@ -2,9 +2,16 @@
 
 encounter:
   max_turns: 20                   # Q-24; --max-turns 10 for development
-  # Q-27: derived in code as max_turns * 6 + 20, never a bare constant, so the
-  # recursion backstop cannot drift away from the real stop condition.
-  recursion_limit_multiplier: 6
+  # Q-27: derived in code, never a bare constant, so the recursion backstop
+  # cannot drift away from the real stop condition. Per GRAPH, because the two
+  # have different loop shapes: single_doctor uses ~5 supersteps per executed
+  # turn; the panel adds 4 more for every finalize the orchestrator proposes and
+  # then backs away from after being challenged. One shared multiplier meant the
+  # panel crashed after ~10 re-deliberations -- and crashed precisely on the
+  # cases where the challenger was working, which is the worst possible bias.
+  recursion_limit_multiplier:
+    single_doctor: 6
+    panel: 10
   recursion_limit_headroom: 20
   # Q-26: there is deliberately NO confidence-threshold stop rule. It would
   # truncate exactly the high-confidence cases the calibration analysis needs.

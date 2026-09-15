@@ -901,3 +901,47 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
 - **Still open for the user:** whether the judge ultimately runs on OpenRouter
   (restoring brief §0.2, ~$0.07–$1 for all 214 cases) or on Anthropic API
   credits (~$3). Nothing needs deciding until evaluation scales.
+
+## D-048 — The recursion limit is derived per graph, not per project
+
+- **Date:** 2026-09-15
+- **Question:** Q-27 derived the limit as `max_turns × 6 + 20`, sized for
+  `single_doctor`'s ~5 supersteps per executed turn. The panel adds 4 more for
+  every finalize the orchestrator proposes and then withdraws after being
+  challenged.
+- **Measured** on a scripted model at the shipped defaults (20 turns, limit
+  140): `single_doctor` uses 102 supersteps; the panel survives 9
+  re-deliberations at 138 and raises `GraphRecursionError` at the 10th.
+- **Decision:** `recursion_limit_multiplier` becomes a per-graph mapping —
+  `single_doctor: 6`, `panel: 10` — and `load_budgets(graph=...)` raises on an
+  unknown graph rather than defaulting.
+- **Reason:** not the crash but its **direction**. A panel case crashes exactly
+  when the challenger repeatedly changes the orchestrator's mind, which is the
+  phenomenon the panel arm exists to measure. The runner records `crash` and the
+  case leaves the accuracy denominator, so panel accuracy would be computed over
+  the subset where the challenger was *least* effective while `single_doctor`
+  loses nothing. No sample size fixes that.
+
+## D-049 — Advisory nodes degrade to "no opinion"; opinions are one-shot
+
+- **Date:** 2026-09-15
+- **Question:** two defects with one root — what happens to an opinion.
+  1. `cost_objection` was in `PanelOutput` but not `PanelInput`, and every action
+     node cleared it. The cost-steward runs *after* the orchestrator, so its
+     objection could only matter by crossing into the next invocation — which
+     both mechanisms independently prevented. Measured: 3 orchestrator prompts,
+     none containing the objection.
+  2. `StructuredOutputFailed` escaped the challenger and cost-steward entirely,
+     crashing the case.
+- **Decision:** `PanelInput` carries **both** opinion keys. The **orchestrator**
+  clears them after rendering, making an opinion one-shot; action nodes no
+  longer touch them. Both advisory nodes are wrapped so a structured-output
+  failure yields `None` and a `parse_failures` delta instead of an exception.
+- **Reason:** (1) contradicted D-025 twice over and reduced the panel to one
+  working sub-role, so the headline comparison would have attributed to
+  "challenge *and* cost opinions" what was really challenge opinions plus a line
+  of transcript. (2) The same failure in `single_doctor`'s orchestrator becomes a
+  scored forced finalize, so the asymmetry was itself a comparison defect.
+- **Note:** PLAN.md §2.3's `input_schema` list carried the same omission — the
+  defect was inherited from the plan, not invented in Phase 4. The plan is
+  corrected.

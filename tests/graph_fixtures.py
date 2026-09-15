@@ -52,3 +52,29 @@ def build(cases, script, *, case_id="medqa-0010", max_turns=10, guards=None, pat
         max_turns=max_turns, guards=guards,
     )
     return graph, model, store
+
+
+CHALLENGE = {"argument_against_leader": "The imaging is not specific.",
+             "most_dangerous_unexcluded": "Cerebral abscess"}
+COST_OK = {"objection": None, "would_change_management": True}
+COST_OBJECT = {"objection": "Unlikely to change management at this stage.",
+               "would_change_management": False}
+
+
+def build_panel(cases, script, *, case_id="medqa-0010", max_turns=10, guards=None,
+                patient=None):
+    """Compile the panel encounter graph on a scripted model."""
+    from agentclinic.graphs.encounter import build_encounter_graph
+
+    store = CaseStore(cases)
+    model = FakeChatModel(script)
+    caller = LLMCaller(model, guards=guards)
+    costs = load_test_costs()
+    graph = build_encounter_graph(
+        caller=caller,
+        patient=patient or ScriptedPatient(),
+        gatekeeper=Gatekeeper(store.gatekeeper_view(case_id), costs),
+        costs=costs, case_id=case_id, decision_model=Decision, enabled=ENABLED,
+        max_turns=max_turns, guards=guards,
+    )
+    return graph, model, store

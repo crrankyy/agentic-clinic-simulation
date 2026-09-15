@@ -227,7 +227,8 @@ executed action clears both the flag and the opinion.
 
 ```
 input_schema : objective, summary, differential, red_flags, turn,
-               challenged_this_finalize, budget_exhausted, challenger_opinion
+               challenged_this_finalize, budget_exhausted,
+               challenger_opinion, cost_objection        # BOTH (D-049)
 output_schema: action, action_argument, challenger_opinion, cost_objection,
                panel_events, spend_usd, parse_failures, budget_exhausted
 ```

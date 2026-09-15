@@ -12,11 +12,17 @@ on every subsequent turn.
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Any, Callable
 
 from ..config import CONFIG_DIR
-from ..graphs.schemas import FinalAnswer, HypothesisUpdate
+from ..graphs.schemas import (
+    ChallengerOpinion,
+    CostStewardOpinion,
+    FinalAnswer,
+    HypothesisUpdate,
+)
 from ..graphs.state import DifferentialItem, EncounterSummary, Event
 from ..graphs.guarding import budget_guarded
 from ..llm.guards import BudgetExceeded
@@ -160,7 +166,16 @@ def make_orchestrator_node(
                 "panel_events": [Event(turn=turn, kind="parse_failure", actor="system",
                                        text=str(exc)[:300])],
             }
-        return {"action": decision.action, "action_argument": decision.argument}
+        # One-shot: an opinion is rendered into exactly one decision, then
+        # cleared here rather than by the action node. Clearing it downstream
+        # meant `order_test` -- the only action that can produce an objection --
+        # wiped it before any orchestrator ever saw it.
+        return {
+            "action": decision.action,
+            "action_argument": decision.argument,
+            "challenger_opinion": None,
+            "cost_objection": None,
+        }
 
     return budget_guarded(orchestrator, channel="panel_events")
 
@@ -238,3 +253,120 @@ def make_finalize_node(caller: Any, case_id: str, config_dir: Path | None = None
     # skip_if_exhausted=False: finalize must still run after a breach — it is the
     # node that produces the final answer, and nothing follows it.
     return budget_guarded(finalize, channel="encounter_log", skip_if_exhausted=False)
+
+
+def advisory(node: Callable, *, keys: tuple[str, ...]) -> Callable:
+    """Let an advisory node fail without taking the case with it.
+
+    `budget_guarded` covers budget breaches; this covers the other way a model
+    call ends badly. An opinion that cannot be produced is simply absent — but
+    an unhandled `StructuredOutputFailed` propagates out of `graph.ainvoke`, the
+    runner records `crash`, and the case leaves the accuracy denominator. That
+    asymmetry is itself a defect: the same failure in the orchestrator becomes a
+    scored forced finalize, so the panel would lose cases the single doctor keeps.
+    """
+
+    @functools.wraps(node)
+    async def wrapper(state: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await node(state)
+        except StructuredOutputFailed as exc:
+            return {**{k: None for k in keys}, "parse_failures": exc.attempts}
+
+    return wrapper
+
+
+def make_challenger_node(
+    caller: Any, case_id: str, *, channel: str, when: str = "scheduled",
+    config_dir: Path | None = None,
+) -> Callable:
+    """Build the challenger — advisory only (D-025).
+
+    It writes a **typed** `challenger_opinion` rather than relying on the
+    orchestrator finding its words in the transcript. That matters: the decision
+    subgraph deliberately cannot read `encounter_log`, so an opinion delivered as
+    free-text event would either be invisible to the orchestrator or would force
+    the raw log back across the boundary — which is the isolation this design
+    exists to keep.
+
+    `channel` differs by position: inside the subgraph events go to
+    `panel_events`; `challenger_final` runs in the parent and writes
+    `encounter_log` directly.
+    """
+    template = _prompt("challenger.md", config_dir)
+
+    async def challenger(state: dict[str, Any]) -> dict[str, Any]:
+        prompt = template.format(
+            objective=state.get("objective", ""),
+            differential=render_differential(state.get("differential", [])),
+            summary=render_summary(state.get("summary", EncounterSummary())),
+        )
+        opinion: ChallengerOpinion = await caller.structured(
+            ChallengerOpinion, prompt, case_id=case_id, node="challenger"
+        )
+        turn = int(state.get("turn", 0))
+        return {
+            "challenger_opinion": opinion,
+            channel: [Event(turn=turn, kind="challenge", actor="doctor",
+                            meta={"when": when},
+                            text=f"{opinion.argument_against_leader} "
+                                 f"Most dangerous unexcluded: {opinion.most_dangerous_unexcluded}")],
+        }
+
+    return advisory(budget_guarded(challenger, channel=channel),
+                    keys=("challenger_opinion",))
+
+
+def make_challenger_final_node(
+    caller: Any, case_id: str, config_dir: Path | None = None
+) -> Callable:
+    """The challenger placed before a voluntary finalize.
+
+    Sets `challenged_this_finalize`, which `route_action` reads **before** this
+    node runs on the next pass — that ordering is what bounds the re-deliberation
+    to exactly one without a counter to get wrong.
+    """
+    inner = make_challenger_node(caller, case_id, channel="encounter_log",
+                                 when="pre_finalize", config_dir=config_dir)
+
+    async def challenger_final(state: dict[str, Any]) -> dict[str, Any]:
+        update = await inner(state)
+        update["challenged_this_finalize"] = True
+        return update
+
+    return challenger_final
+
+
+def make_cost_steward_node(
+    caller: Any, case_id: str, costs: Any, config_dir: Path | None = None
+) -> Callable:
+    """Build the cost-steward — advisory only (D-025).
+
+    It reasons from the proposed test name and the price table, and has no
+    budget state: `test_cost_usd` is deliberately outside the subgraph schemas.
+    Its objection informs later decisions; the order it objects to still goes
+    ahead, because D-025 gives it no veto.
+    """
+    template = _prompt("cost_steward.md", config_dir)
+
+    async def cost_steward(state: dict[str, Any]) -> dict[str, Any]:
+        proposed = state.get("action_argument") or ""
+        prompt = template.format(
+            objective=state.get("objective", ""),
+            proposed_test=proposed,
+            cost=f"${costs.price(proposed):.0f} (illustrative, not a fee schedule)",
+            differential=render_differential(state.get("differential", [])),
+            summary=render_summary(state.get("summary", EncounterSummary())),
+        )
+        opinion: CostStewardOpinion = await caller.structured(
+            CostStewardOpinion, prompt, case_id=case_id, node="cost_steward"
+        )
+        turn = int(state.get("turn", 0))
+        events = []
+        if opinion.objection:
+            events.append(Event(turn=turn, kind="cost_objection", actor="doctor",
+                                text=opinion.objection))
+        return {"cost_objection": opinion, "panel_events": events}
+
+    return advisory(budget_guarded(cost_steward, channel="panel_events"),
+                    keys=("cost_objection",))

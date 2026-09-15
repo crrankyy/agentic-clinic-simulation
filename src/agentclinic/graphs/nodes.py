@@ -20,7 +20,12 @@ from .state import EncounterState, Event
 
 #: Applied by every action node, so a finalize attempt after new information is
 #: treated as a fresh one.
-_CLEARS = {"challenged_this_finalize": False, "challenger_opinion": None, "cost_objection": None}
+#:
+#: The opinions are deliberately NOT cleared here. `order_test` is the only
+#: action that can produce a cost objection, and it runs immediately after the
+#: deliberation that produced it — wiping the key here meant no orchestrator
+#: ever saw one. The orchestrator clears them instead, once it has rendered them.
+_CLEARS = {"challenged_this_finalize": False}
 
 
 def make_ask_patient(patient: Any, case_id: str) -> Callable:

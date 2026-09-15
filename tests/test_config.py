@@ -54,3 +54,23 @@ def test_unknown_test_is_priced_at_the_table_median():
     assert costs.price("Complete_Blood_Count") == 25.0
     assert costs.price("Some_Test_Nobody_Configured") == costs.unknown_price
     assert min(costs.prices.values()) < costs.unknown_price < max(costs.prices.values())
+
+
+def test_recursion_limit_follows_the_graph_shape():
+    """The panel needs more supersteps per turn than the single doctor.
+
+    One shared multiplier meant the panel hit GraphRecursionError after about ten
+    finalize re-deliberations -- and crashed precisely on the cases where the
+    challenger kept changing the orchestrator's mind, which is the phenomenon the
+    panel arm exists to measure.
+    """
+    solo = load_budgets(graph="single_doctor").recursion_limit
+    panel = load_budgets(graph="panel").recursion_limit
+    assert panel > solo, "the panel's loop is longer per turn"
+    assert solo == 20 * 6 + 20
+    assert panel == 20 * 10 + 20
+
+
+def test_an_unknown_graph_is_rejected_rather_than_defaulted():
+    with pytest.raises(KeyError, match="no recursion multiplier"):
+        load_budgets(graph="not_a_graph")

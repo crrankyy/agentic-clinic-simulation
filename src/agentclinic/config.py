@@ -97,12 +97,28 @@ def load_models(config_dir: Path | None = None) -> ModelConfig:
     )
 
 
-def load_budgets(config_dir: Path | None = None, *, max_turns: int | None = None) -> Budgets:
+def load_budgets(
+    config_dir: Path | None = None,
+    *,
+    max_turns: int | None = None,
+    graph: str = "single_doctor",
+) -> Budgets:
     raw = _load("budgets.yaml", config_dir)
     enc, spend, req, ret = raw["encounter"], raw["spend"], raw["requests"], raw["retries"]
     turns = max_turns if max_turns is not None else int(enc["max_turns"])
-    # Q-27: derived from the turn cap in code so the two cannot drift apart.
-    recursion = turns * int(enc["recursion_limit_multiplier"]) + int(enc["recursion_limit_headroom"])
+    # Q-27: derived from the turn cap *and the graph shape*, so neither can
+    # drift away from the other.
+    multipliers = enc["recursion_limit_multiplier"]
+    if isinstance(multipliers, dict):
+        if graph not in multipliers:
+            raise KeyError(
+                f"no recursion multiplier for graph {graph!r}; "
+                f"known: {sorted(multipliers)}"
+            )
+        multiplier = int(multipliers[graph])
+    else:  # a single scalar, kept working for older config files
+        multiplier = int(multipliers)
+    recursion = turns * multiplier + int(enc["recursion_limit_headroom"])
     return Budgets(
         max_turns=turns,
         recursion_limit=recursion,
