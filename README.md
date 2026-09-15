@@ -85,3 +85,4 @@ OpenRouter allowance, so it binds to loopback.
 | `docs/PLAN.md` | Architecture and graph design (written after decisions are collected) |
 | `docs/PLAN_REVIEW.md` | Adversarial review of the plan, plus resolutions |
 | `docs/PHASE_N_NOTES.md` | Per-phase notes: what was built, decisions made, surprises |
+| `docs/documentation/` | **Full codebase documentation** — start at its `README.md` |
