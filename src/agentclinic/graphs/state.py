@@ -32,7 +32,8 @@ EventKind = Literal[
 
 Actor = Literal["doctor", "patient", "gatekeeper", "evidence", "system"]
 
-StopReason = Literal["finalize", "turn_cap", "spend_cap", "request_cap", "budget_exhausted"]
+StopReason = Literal["finalize", "turn_cap", "spend_cap", "request_cap",
+                     "budget_exhausted", "parse_failure"]
 #: `crash` is deliberately absent: it means the graph raised, so `finalize`
 #: never ran and `stop_reason` is None. It is a runner-level outcome instead.
 
@@ -55,8 +56,11 @@ class RedFlag(BaseModel):
 class EncounterSummary(BaseModel):
     """What the doctor actually sees. Raw messages are never resent.
 
-    `findings` and `tests_ordered` are derived from `encounter_log` by the
-    hypothesis node; `ruled_out` and `open_questions` come from its own output.
+    `findings` is **written by the model** in its own words (D-041), not copied
+    from the transcript — copying would let the orchestrator read raw event text
+    through the summary and defeat Q-29 entirely. `tests_ordered` is mechanical
+    and safe: those are the doctor's own requests, and carry no result text.
+    `ruled_out` and `open_questions` come from the hypothesis node's output.
     Each list is truncated oldest-first, and every drop is logged as an Event so
     the loss is visible in the trace rather than silent.
     """
@@ -123,7 +127,7 @@ STATE_SOURCES: dict[str, tuple[str, ...]] = {
     "test_cost_usd": ("request_exam", "order_test"),
     "parse_failures": ("hypothesis", "orchestrator", "challenger", "challenger_final",
                        "cost_steward", "ask_patient", "finalize", "gatekeeper"),
-    "stop_reason": ("check_stop", "budget_guard", "finalize"),
+    "stop_reason": ("check_stop", "budget_guard", "orchestrator", "finalize"),
     "final": ("finalize",),
 }
 

@@ -37,7 +37,7 @@ packages = ["src/agentclinic"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["scripts"]        # scripts/ is not a package
+pythonpath = ["scripts", "tests"]   # neither is a package
 asyncio_mode = "auto"
 markers = [
     "live: touches a real network API; deselected by default (brief Section 11)",

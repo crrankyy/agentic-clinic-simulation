@@ -687,3 +687,58 @@ Raised by `docs/PLAN_REVIEW_2.md`. All four recommendations accepted.
   implementation choice with one clearly correct answer and the review
   recommended it explicitly; flagged here so it can be reversed if the user
   disagrees.
+
+---
+
+# Phase 3 decisions (2026-09-15)
+
+Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
+
+## D-040 — `parse_failure` is a stop reason; `spend_cap` is not reachable in state
+
+- **Date:** 2026-09-15
+- **Question:** Q-15 requires a forced finalize after the repair budget, kept
+  distinct from a clinical abstention. Where does that distinction live?
+- **Decision:** `StopReason` gains **`parse_failure`**, written by the
+  orchestrator. `stop_reason` therefore crosses the decision subgraph boundary
+  and is declared in `DecideOutput`. `spend_cap` remains in the literal but is
+  **unreachable in practice**: a spend breach surfaces as `BudgetExceeded` and
+  is recorded as `budget_exhausted`, because the breach is detected inside a
+  call rather than by `check_stop`'s post-hoc comparison.
+- **Reason:** Without a distinct reason the runner cannot separate a JSON
+  formatting failure from clinical uncertainty, and D-028 requires exactly that
+  separation — one is outcome `error`, the other `abstained`. At n=3 the
+  difference is 33 accuracy points.
+- **⚠️ Amends** PLAN.md §4.1's `StopReason` literal and §2.3's subgraph output
+  schema, both written before the repair loop existed.
+
+## D-041 — `EncounterSummary.findings` is written by the model, not copied from the log
+
+- **Date:** 2026-09-15
+- **Question:** PLAN.md §4.1 said `findings` is "derived from `encounter_log` by
+  the hypothesis node". The first implementation read that as *copied* — each
+  finding was `f"{actor}: {text}"` straight from the transcript.
+- **Decision:** `HypothesisUpdate` gains a **`findings`** field. The model writes
+  a short summary in its own words; the prompt states that later turns see the
+  summary rather than the exchange. `tests_ordered` stays mechanical, because
+  those are the doctor's own requests and carry no result text.
+- **Reason:** Copying defeated Q-29 completely. The decision subgraph's schema
+  genuinely excludes `encounter_log`, so the structural isolation held — but the
+  orchestrator was reading the transcript *through* the summary. For the 29
+  cases where the dataset embeds the diagnosis in test results, that is the
+  difference between the doctor seeing it once and on every subsequent turn,
+  which is precisely the concern behind review finding B-7.
+- **Caught by:** `test_orchestrator_prompt_contains_no_raw_event_text`, written
+  before the bug was known to exist.
+
+## D-042 — `.env` loading
+
+- **Date:** 2026-09-15
+- **Question:** Keys exported in an interactive shell are not visible to the
+  tooling, which spawns fresh shells. How are secrets supplied?
+- **Decision:** The CLI loads a git-ignored `.env` at startup, with
+  `.env.example` committed (brief §4). **Real environment variables always take
+  precedence**, so an explicit export is never overridden by a stale file. Only
+  variable *names* are echoed, never values.
+- **Reason:** The brief requires `.env.example`; this makes it functional rather
+  than decorative, and keeps secrets out of both the repository and the logs.

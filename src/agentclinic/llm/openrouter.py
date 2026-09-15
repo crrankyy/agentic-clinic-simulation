@@ -22,7 +22,7 @@ from typing import Any
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.outputs import LLMResult
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .guards import RunGuards
 
@@ -31,6 +31,22 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 class MissingCredentials(RuntimeError):
     """`OPENROUTER_API_KEY` is not set."""
+
+
+class StructuredOutputFailed(RuntimeError):
+    """The model could not produce schema-valid output within the attempt budget.
+
+    Raised rather than returning a best guess: a silently coerced object would
+    put a fabricated decision into the encounter and make the failure invisible
+    in the metrics.
+    """
+
+    def __init__(self, schema: str, attempts: int, last_error: str) -> None:
+        super().__init__(
+            f"{schema} did not validate after {attempts} attempts; last error: {last_error}"
+        )
+        self.schema = schema
+        self.attempts = attempts
 
 
 @dataclass
@@ -122,6 +138,16 @@ class LLMCaller:
         self.guards = guards
         self.recorder = recorder
         self.tracer = tracer
+        #: Per case, because one caller is shared by concurrent encounters and a
+        #: single cumulative counter would attribute repairs to the wrong case.
+        self.parse_failures_by_case: dict[str, int] = {}
+
+    def _record_failures(self, case_id: str, n: int) -> None:
+        if n:
+            self.parse_failures_by_case[case_id] = self.parse_failures_for(case_id) + n
+
+    def parse_failures_for(self, case_id: str) -> int:
+        return self.parse_failures_by_case.get(case_id, 0)
 
     async def _before(self, case_id: str) -> None:
         if self.guards is not None:
@@ -141,13 +167,45 @@ class LLMCaller:
         return usage
 
     async def structured(
-        self, schema: type[BaseModel], messages: Any, *, case_id: str, node: str
+        self,
+        schema: type[BaseModel],
+        messages: Any,
+        *,
+        case_id: str,
+        node: str,
+        attempts: int = 3,
     ) -> BaseModel:
-        await self._before(case_id)
-        started = time.monotonic()
-        result = await self.model.with_structured_output(schema).ainvoke(messages)
-        self._after(case_id, node, started)
-        return result  # type: ignore[return-value]
+        """Ask for schema-valid output, repairing on failure.
+
+        Q-15: three attempts (initial + 2 repairs), each re-prompting with the
+        validation error. The attempt counter is a **local variable** — there is
+        deliberately no graph cycle here, because a cycle through the router
+        would bypass `check_stop` and so escape both the turn cap and the spend
+        cap.
+        """
+        runnable = self.model.with_structured_output(schema)
+        prompt = messages
+        last_error = ""
+        for attempt in range(1, attempts + 1):
+            await self._before(case_id)
+            started = time.monotonic()
+            try:
+                result = await runnable.ainvoke(prompt)
+                self._after(case_id, node, started)
+                self._record_failures(case_id, attempt - 1)
+                return result  # type: ignore[return-value]
+            except (ValidationError, ValueError) as exc:
+                self._after(case_id, node, started)
+                last_error = str(exc)[:400]
+                if self.tracer is not None:
+                    self.tracer.node(case_id=case_id, node=node, event="parse_failure",
+                                     attempt=attempt, error=last_error[:200])
+                prompt = (
+                    f"{messages}\n\n---\nYour previous reply did not match the required "
+                    f"schema. Error:\n{last_error}\nReply again, valid this time."
+                )
+        self._record_failures(case_id, attempts)
+        raise StructuredOutputFailed(schema.__name__, attempts, last_error)
 
     async def text(self, messages: Any, *, case_id: str, node: str) -> str:
         await self._before(case_id)

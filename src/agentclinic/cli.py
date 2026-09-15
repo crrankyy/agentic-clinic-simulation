@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import load_budgets, load_models, load_test_costs
+from .config import load_budgets, load_dotenv, load_models, load_test_costs
 from .data.loader import load_cases
 from .data.splits import build_splits, select_eval_subset, write_splits
 
@@ -35,6 +35,11 @@ DISCLAIMER = (
 @app.callback()
 def _main() -> None:
     console.print(Panel(DISCLAIMER, border_style="yellow", title="⚠"))
+    # Loaded here rather than in each command so `play` and `run` behave the
+    # same. Real environment variables take precedence over the file.
+    loaded = load_dotenv()
+    if loaded:
+        console.print(f"[dim].env loaded: {', '.join(loaded)}[/dim]")
 
 
 @app.command()
@@ -116,7 +121,12 @@ def play(
     if stub_patient:
         patient: Any = StubPatient()
     else:
-        from .llm.openrouter import LLMCaller, UsageRecorder, build_chat_model
+        from .llm.openrouter import (
+        LLMCaller,
+        MissingCredentials,
+        UsageRecorder,
+        build_chat_model,
+    )
 
         models = load_models()
         recorder = UsageRecorder()
@@ -170,6 +180,147 @@ def play(
             await graph.ainvoke(Command(resume={"action": action, "argument": argument}), cfg)
 
     asyncio.run(run())
+
+
+@app.command()
+def run(
+    split: str = typer.Option("dev", help="dev or heldout (heldout needs the explicit flag)"),
+    limit: int = typer.Option(3, help="number of cases; the fixed subset is 3 (D-022)"),
+    max_turns: int = typer.Option(20),
+    no_report: bool = typer.Option(False, "--no-report", help="skip report.md/results.csv"),
+    cache: bool = typer.Option(False, "--cache", help="allow the response cache (dev only)"),
+) -> None:
+    """Run the single-doctor configuration over the evaluation subset."""
+    import asyncio
+    import json
+    import uuid
+
+    from .agents.gatekeeper import Gatekeeper, make_llm_disambiguator
+    from .agents.judge import Judge
+    from .agents.patient import Patient
+    from .config import load_budgets, load_dotenv, load_models, load_test_costs
+    from .data.splits import select_eval_subset
+    from .data.views import CaseStore
+    from .eval.report import RunMetadata, render, write_report
+    from .eval.runner import run_evaluation, write_results_csv
+    from .graphs.schemas import make_orchestrator_decision
+    from .graphs.single_doctor import build_single_doctor_graph
+    from .llm.guards import DailyRequestCounter, RunGuards, SpendTracker, TokenBucket
+    from .llm.openrouter import (
+        LLMCaller,
+        MissingCredentials,
+        UsageRecorder,
+        build_chat_model,
+    )
+    from .tracing import Tracer
+
+    # Q-34: the cache is hard-disabled for any run that writes a report. This is
+    # an assertion, not a flag default, so it cannot be turned off by accident.
+    if cache and not no_report:
+        console.print("[red]--cache requires --no-report: a reported run must not "
+                      "replay cached completions.[/red]")
+        raise typer.Exit(2)
+
+    models, budgets, costs = load_models(), load_budgets(max_turns=max_turns), load_test_costs()
+    cases = load_cases(DATASET)
+    store = CaseStore(cases)
+
+    splits_path = ROOT / "dataset" / "splits.json"
+    if not splits_path.exists():
+        console.print("[red]dataset/splits.json missing — run `splits --write` first[/red]")
+        raise typer.Exit(1)
+    splits = json.loads(splits_path.read_text())
+    if split == "heldout":
+        console.print("[yellow]running on the HELD-OUT split[/yellow]")
+    subset = (select_eval_subset(cases, splits["dev"], n=limit) if split == "dev"
+              else sorted(splits["heldout"])[:limit])
+    selected = [c for c in cases if c.case_id in set(subset)]
+    console.print(f"cases: {[c.case_id for c in selected]}")
+
+    run_id = f"{split}-single_doctor-{uuid.uuid4().hex[:8]}"
+    run_dir = ROOT / "runs" / run_id
+    tracer = Tracer(run_dir=run_dir)
+
+    guards = RunGuards(
+        bucket=TokenBucket(rate_per_minute=budgets.rate_per_minute,
+                           capacity=budgets.rate_per_minute),
+        daily=DailyRequestCounter(ROOT / "runs" / ".daily.json", limit=budgets.requests_per_day),
+        spend=SpendTracker(per_case_cap=budgets.spend_per_case_usd,
+                           per_run_cap=budgets.spend_per_run_usd),
+    )
+    remaining = guards.daily.remaining()
+    # Pre-flight. ~3 calls per turn (hypothesis, orchestrator, patient/gatekeeper)
+    # plus a finalize. Refusing up front is far better than discovering the cap
+    # mid-run, where a daily-cap 429 turns every remaining case into an `error`
+    # and silently shrinks the accuracy denominator.
+    projected = len(selected) * (max_turns * 3 + 2)
+    console.print(f"daily requests remaining: {remaining}  projected: ~{projected}")
+    if projected > remaining:
+        console.print(
+            f"[red]refusing to start: this run needs roughly {projected} requests but "
+            f"only {remaining} remain in today's allowance.[/red]\n"
+            "[dim]reduce --limit or --max-turns, or wait for the 00:00 UTC reset[/dim]"
+        )
+        raise typer.Exit(2)
+
+    enabled = frozenset({"ask_patient", "request_exam", "order_test"})
+    decision_model = make_orchestrator_decision(enabled)
+    recorder = UsageRecorder()
+    try:
+        chat = build_chat_model(
+            model=models.for_role("orchestrator"),
+            pin_provider=None if (cache and no_report) else models.provider.pin,
+            allow_fallbacks=models.provider.allow_fallbacks,
+            attribution_title=models.provider.attribution_title,
+            timeout=budgets.timeout_seconds,
+            max_retries=budgets.retry_attempts,
+        ).with_config(callbacks=[recorder])
+    except MissingCredentials as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print("[dim]export OPENROUTER_API_KEY=... and try again[/dim]")
+        raise typer.Exit(1) from None
+    caller = LLMCaller(chat, guards=guards, recorder=recorder, tracer=tracer)
+    judge = Judge(model=models.judge.model,
+                  max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer)
+
+    def build_graph(case_id: str) -> Any:
+        return build_single_doctor_graph(
+            caller=caller,
+            patient=Patient(store.patient_view(case_id), caller),
+            gatekeeper=Gatekeeper(
+                store.gatekeeper_view(case_id), costs,
+                # Without this the cascade stops at exact + synonyms, and every
+                # other request becomes a fabricated "not available".
+                llm_disambiguate=make_llm_disambiguator(caller, case_id),
+            ),
+            case_id=case_id, decision_model=decision_model, enabled=enabled,
+            max_turns=budgets.max_turns, guards=guards,
+        )
+
+    results = asyncio.run(run_evaluation(
+        cases=selected, store=store, build_graph=build_graph, judge=judge,
+        recursion_limit=budgets.recursion_limit, concurrency=budgets.concurrency,
+        tracer=tracer, guards=guards, caller=caller,
+    ))
+
+    for r in results:
+        console.print(f"  {r.case_id}  {r.outcome:9s} {r.match_type or '—':9s} "
+                      f"turns={r.turns} stop={r.stop_reason}")
+
+    if no_report:
+        console.print(f"[dim]--no-report: traces only, at {run_dir}[/dim]")
+        return
+
+    meta = RunMetadata(
+        run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
+        judge_model=models.judge.model, provider_pin=",".join(models.provider.pin),
+        fallbacks=models.provider.allow_fallbacks, cache_enabled=cache,
+        structured_output_mode="strict", enabled_actions=tuple(sorted(enabled)),
+        max_turns=budgets.max_turns, split=split,
+    )
+    write_report(render(results, meta), run_dir / "report.md")
+    write_results_csv(results, run_dir / "results.csv")
+    console.print(f"[green]report: {run_dir / 'report.md'}[/green]")
 
 
 @app.command()

@@ -114,3 +114,28 @@ def load_test_costs(config_dir: Path | None = None) -> TestCosts:
     default = raw.get("default", "median")
     unknown = statistics.median(prices.values()) if default == "median" else float(default)
     return TestCosts(prices=prices, unknown_price=unknown)
+
+
+def load_dotenv(path: Path | None = None) -> list[str]:
+    """Load `.env` into the process environment. Returns the names it set.
+
+    Deliberately minimal and dependency-free. **Existing environment variables
+    always win**, so an explicitly exported key is never silently overridden by
+    a stale file. Values are never logged — only names are returned.
+    """
+    import os
+
+    env_path = path or (CONFIG_DIR.parent / ".env")
+    if not env_path.exists():
+        return []
+    loaded: list[str] = []
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+            loaded.append(key)
+    return loaded

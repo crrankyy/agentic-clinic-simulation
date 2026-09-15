@@ -379,12 +379,13 @@ class RedFlag(BaseModel):
     turn: int
 
 class EncounterSummary(BaseModel):                   # Q-29; each field ~2000 chars
-    findings: list[str]                              # hypothesis, from encounter_log
+    findings: list[str]                              # MODEL-AUTHORED (D-041), not copied
     tests_ordered: list[str]                         # hypothesis, from encounter_log
     ruled_out: list[str]                             # from HypothesisUpdate
     open_questions: list[str]                        # from HypothesisUpdate
 
-StopReason = Literal["finalize","turn_cap","spend_cap","request_cap","budget_exhausted"]
+StopReason = Literal["finalize","turn_cap","spend_cap","request_cap",
+                     "budget_exhausted","parse_failure"]   # D-040
 # `crash` is a runner-level OUTCOME, not a stop reason: the graph raised, so
 # finalize never ran and stop_reason is None (review B-3).
 
@@ -708,6 +709,8 @@ Log: **`docs/DECISIONS.md`** (D-001 … D-037). Option analysis:
 | No rule-based red-flag check | Q-28 chose model + rule-based | Model-reported only | D-027 |
 | No fuzzy matching tier | Q-11 chose a 4-tier cascade | 3 tiers: exact → synonym → LLM | D-034 |
 | No challenger before a cap-forced finalize | Q-16 — before *every* finalize | Voluntary path only | D-038 |
+| `parse_failure` added to `StopReason` | §4.1 listed five values | Six; `spend_cap` unreachable | D-040 |
+| `findings` written by the model | §4.1 said "derived from `encounter_log`" | Model-authored summary | D-041 |
 | `red_flag` is a list | §5.3 — implies a boolean | List of named concerns | Q-17 |
 | No confidence stop rule | §6.4 — asks for values | Deliberately omitted | Q-26 |
 | Errors, crashes, abstentions excluded from accuracy | §8 — unspecified | Excluded; coverage reported | Q-08, D-028 |

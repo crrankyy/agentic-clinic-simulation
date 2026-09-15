@@ -19,7 +19,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..agents.gatekeeper import Gatekeeper
-from .routing import check_stop, route_action, route_stop
+from .nodes import make_ask_patient, make_check_stop, make_gatekeeper_node
+from .routing import route_action, route_stop
 from .state import EncounterState, Event
 
 #: Actions a human doctor can take in Phase 2. `search_literature` arrives with
@@ -61,48 +62,7 @@ def build_interactive_graph(
             "action_argument": decision.get("argument", ""),
         }
 
-    async def ask_patient(state: EncounterState) -> dict[str, Any]:
-        question = state.get("action_argument") or ""
-        turn = int(state.get("turn", 0)) + 1
-        reply = await patient.answer(question, case_id=case_id)
-        return {
-            "encounter_log": [
-                Event(turn=turn, kind="question", actor="doctor", text=question),
-                Event(turn=turn, kind="answer", actor="patient", text=reply.reply,
-                      meta={"unknown": str(reply.unknown)}),
-            ],
-            # Any executed action clears the finalize flag and stale opinions.
-            "challenged_this_finalize": False,
-            "challenger_opinion": None,
-            "cost_objection": None,
-        }
-
-    def _gatekeeper_node(domain: str, kind: str):
-        async def node(state: EncounterState) -> dict[str, Any]:
-            request = state.get("action_argument") or ""
-            turn = int(state.get("turn", 0)) + 1
-            reply = await gatekeeper.respond(request, domain)  # type: ignore[arg-type]
-            events = [
-                Event(turn=turn, kind=kind, actor="doctor", text=request),
-                Event(turn=turn, kind=kind, actor="gatekeeper", text=reply.text,
-                      meta={"tier": reply.tier, "key": str(reply.key),
-                            "cost_usd": f"{reply.cost_usd:.2f}"}),
-            ]
-            if reply.unlisted:
-                events.append(Event(turn=turn, kind="unlisted_test", actor="system",
-                                    text=f"requested {request!r} is not in this case"))
-            return {
-                "encounter_log": events,
-                "test_cost_usd": reply.cost_usd,
-                "challenged_this_finalize": False,
-                "challenger_opinion": None,
-                "cost_objection": None,
-            }
-
-        return node
-
-    def stop_node(state: EncounterState) -> dict[str, Any]:
-        return check_stop(state, max_turns=max_turns)
+    stop_node = make_check_stop(max_turns)
 
     def finalize(state: EncounterState) -> dict[str, Any]:
         turn = int(state.get("turn", 0))
@@ -117,9 +77,9 @@ def build_interactive_graph(
     graph = StateGraph(EncounterState)
     graph.add_node("brief", brief)
     graph.add_node("orchestrator", human_orchestrator)
-    graph.add_node("ask_patient", ask_patient)
-    graph.add_node("request_exam", _gatekeeper_node("exams", "exam"))
-    graph.add_node("order_test", _gatekeeper_node("tests", "test"))
+    graph.add_node("ask_patient", make_ask_patient(patient, case_id))
+    graph.add_node("request_exam", make_gatekeeper_node(gatekeeper, "exams", "exam"))
+    graph.add_node("order_test", make_gatekeeper_node(gatekeeper, "tests", "test"))
     graph.add_node("check_stop", stop_node)
     graph.add_node("finalize", finalize)
 

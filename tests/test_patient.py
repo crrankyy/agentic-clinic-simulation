@@ -7,14 +7,19 @@ from agentclinic.data.views import CaseStore
 
 
 def test_prompt_contains_only_patient_side_information(cases):
-    """The patient must not be able to see the objective, exams or tests."""
+    """The patient must not see the objective, the exam findings or the tests."""
     store = CaseStore(cases)
     for case in cases[:40]:
-        prompt = build_prompt(store.patient_view(case.case_id), "What brings you in?")
-        assert case.correct_diagnosis.casefold() not in prompt.casefold()
-        assert case.objective_for_doctor.casefold() not in prompt.casefold()
-        for key in case.test_results:
-            assert key.replace("_", " ").casefold() not in prompt.casefold() or True
+        prompt = build_prompt(store.patient_view(case.case_id), "What brings you in?").casefold()
+        assert case.correct_diagnosis.casefold() not in prompt
+        assert case.objective_for_doctor.casefold() not in prompt
+        # Test *result text* must never appear. Key names are not asserted on:
+        # a key like "Blood_Tests" is ordinary English that can legitimately
+        # occur in a patient history, so asserting on it would be flaky rather
+        # than meaningful.
+        for value in case.test_results.values():
+            if isinstance(value, str) and len(value) > 25:
+                assert value.casefold() not in prompt
 
 
 def test_prompt_renders_dict_and_list_fields_readably(cases):

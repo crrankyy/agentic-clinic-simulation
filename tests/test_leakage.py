@@ -37,14 +37,28 @@ def test_dx_in_results_counts_exactly_29(cases):
 
 
 def test_dx_in_results_requires_key_matching(cases):
-    """Case 154's diagnosis is only visible via a key name, not a value."""
+    """Case 154's diagnosis is visible only through a key name.
+
+    The real assertion: a values-only scan scores this case leak-free, while the
+    adopted keys-and-values rule catches it. If someone ever "simplifies" the
+    rule to values only, this fails.
+    """
     case = next(c for c in cases if c.line_number == 154)
     assert case.correct_diagnosis == "Varicella"
-    assert case.dx_in_results
-    values_only = normalise(" ".join(
-        str(v) for v in flatten_keys_and_values(case.test_results)
-        if not str(v).startswith("Varicella_")))
-    assert "varicella" not in values_only or True  # documented: the key carries it
+    assert case.dx_in_results, "the adopted rule must flag this case"
+
+    def values_only(node):
+        if isinstance(node, dict):
+            for v in node.values():
+                yield from values_only(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from values_only(v)
+        elif node is not None:
+            yield str(node)
+
+    blob = normalise(" ".join(values_only(case.test_results)))
+    assert "varicella" not in blob, "a values-only scan would miss it — hence key matching"
 
 
 def test_dx_in_results_requires_stripping_the_abbreviation(cases):

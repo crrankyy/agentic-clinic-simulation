@@ -220,3 +220,35 @@ def _render(key: str | None, payload: Any, indent: int = 0) -> str:
                           else _render(None, item, indent + 1) for item in payload)
         return f"{label}\n{inner}" if label else inner
     return f"{label} {payload}".strip() if label else f"{pad}{payload}"
+
+
+def make_llm_disambiguator(caller: Any, case_id: str, config_dir: Path | None = None) -> Any:
+    """Build the cascade's tier-3 / ambiguous-leaf resolver.
+
+    It is shown **key names only** — never a value. That matters: the matcher
+    would otherwise be reading results it may not be allowed to return, and the
+    brief forbids revealing unordered results.
+    """
+    from pydantic import BaseModel
+
+    template = (config_dir or CONFIG_DIR).joinpath(
+        "prompts", "gatekeeper_disambiguate.md"
+    ).read_text(encoding="utf-8")
+
+    class Choice(BaseModel):
+        entry: str
+
+    async def disambiguate(request: str, candidates: tuple[str, ...]) -> str | None:
+        prompt = template.format(
+            candidates="\n".join(f"- {c}" for c in candidates), request=request
+        )
+        try:
+            choice = await caller.structured(
+                Choice, prompt, case_id=case_id, node="gatekeeper"
+            )
+        except Exception:  # noqa: BLE001 — an unmatched request is a valid answer
+            return None
+        entry = choice.entry.strip()
+        return entry if entry in candidates else None
+
+    return disambiguate
