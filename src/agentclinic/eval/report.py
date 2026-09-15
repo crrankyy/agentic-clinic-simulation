@@ -172,8 +172,12 @@ def render(
         "",
         f"- agent model: `{meta.model}`  provider `{meta.provider_pin}` "
         f"fallbacks={meta.fallbacks}",
-        f"- judge: `{meta.judge_model}` (Anthropic SDK — a recorded override of the "
-        "brief's OpenRouter-only rule)",
+        f"- judge: `{meta.judge_model}`"
+        + ("\n- ⚠️ **Verdicts were assigned by hand, not by a model.** They are a "
+           "one-off reading at n=3, are not reproducible by re-running, and do not "
+           "satisfy the judge-calibration requirement (D-036). No accuracy figure "
+           "here should be compared against an automated run."
+           if "manual" in meta.judge_model else ""),
         f"- enabled actions: {list(meta.enabled_actions)}  max turns: {meta.max_turns}",
         f"- split: {meta.split}  cache: {'on' if meta.cache_enabled else 'off'}  "
         f"structured output: {meta.structured_output_mode}",

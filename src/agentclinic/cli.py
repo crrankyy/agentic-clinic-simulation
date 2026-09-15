@@ -327,7 +327,9 @@ def run(
 
     meta = RunMetadata(
         run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
-        judge_model=models.judge.model, provider_pin=",".join(models.provider.pin),
+        judge_model=("manual (hand-assigned, not a model)" if manual
+                     else models.judge.model),
+        provider_pin=",".join(models.provider.pin),
         fallbacks=models.provider.allow_fallbacks, cache_enabled=cache,
         structured_output_mode=models.structured_output_method, enabled_actions=tuple(sorted(enabled)),
         max_turns=budgets.max_turns, split=split,
@@ -338,7 +340,13 @@ def run(
 
 
 @app.command()
-def judge(run_id: str) -> None:
+def judge(
+    run_id: str,
+    verdicts: Path = typer.Option(
+        None, "--verdicts",
+        help="JSON of hand-assigned verdicts; skips the model entirely.",
+    ),
+) -> None:
     """Judge a completed run's stored answers, without re-running encounters.
 
     Judging needs an Anthropic credential; encounters need ~180 OpenRouter
@@ -364,6 +372,12 @@ def judge(run_id: str) -> None:
         raise typer.Exit(1)
 
     finals = json.loads(finals_path.read_text(encoding="utf-8"))
+    # A hand-assigned verdict file replaces the model. Defensible only at very
+    # small n, and the report says so rather than presenting these as automated.
+    manual: dict[str, Any] = {}
+    if verdicts is not None:
+        manual = json.loads(Path(verdicts).read_text(encoding="utf-8"))
+        console.print(f"[yellow]manual verdicts: {len(manual)} cases, no model call[/yellow]")
     rows = list(csv.DictReader(results_path.open(encoding="utf-8")))
     store = CaseStore(load_cases(DATASET))
     models = load_models()
@@ -371,7 +385,8 @@ def judge(run_id: str) -> None:
     judge_agent = Judge(model=models.judge.model,
                         max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer,
                         require_subscription=models.judge.auth == "subscription")
-    console.print(f"[dim]judge auth: {judge_agent.auth_mode()}[/dim]")
+    if not manual:
+        console.print(f"[dim]judge auth: {judge_agent.auth_mode()}[/dim]")
 
     async def main() -> list[CaseResult]:
         out: list[CaseResult] = []
@@ -399,6 +414,26 @@ def judge(run_id: str) -> None:
                 out.append(r)
                 continue
             final = FinalAnswer.model_validate(answer)
+            if r.case_id in manual:
+                from .graphs.schemas import JudgeVerdict
+
+                verdict = JudgeVerdict.model_validate(manual[r.case_id])
+                tracer.judge(case_id=r.case_id, source="manual",
+                             match_type=verdict.match_type, correct=verdict.correct,
+                             reasoning=verdict.reasoning)
+                r.outcome = "scored"
+                r.diagnosis = final.diagnosis
+                r.differential = [d.diagnosis for d in final.differential]
+                r.match_type = verdict.match_type
+                r.judge_correct = verdict.correct
+                r.lenient_correct = verdict.lenient_correct
+                r.top_1, r.top_3, r.top_5 = (top_k(verdict, 1), top_k(verdict, 3),
+                                             top_k(verdict, 5))
+                r.in_differential = any(verdict.entry_matches)
+                console.print(f"  {r.case_id}  {verdict.match_type:9s} "
+                              f"correct={verdict.correct} top1={r.top_1}  [dim](manual)[/dim]")
+                out.append(r)
+                continue
             try:
                 verdict = await judge_agent.verdict(
                     case_id=r.case_id, final=final, view=store.judge_view(r.case_id))
@@ -427,7 +462,9 @@ def judge(run_id: str) -> None:
     results = asyncio.run(main())
     meta = RunMetadata(
         run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
-        judge_model=models.judge.model, provider_pin=",".join(models.provider.pin),
+        judge_model=("manual (hand-assigned, not a model)" if manual
+                     else models.judge.model),
+        provider_pin=",".join(models.provider.pin),
         fallbacks=models.provider.allow_fallbacks, cache_enabled=False,
         structured_output_mode=models.structured_output_method,
         enabled_actions=("ask_patient", "request_exam", "order_test"),
