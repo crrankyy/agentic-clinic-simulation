@@ -1,0 +1,22 @@
+{
+  "commit_sha": "b6570edefb940857a7c334350656b29f9d984f24",
+  "files": {
+    "agentclinic_medqa.jsonl": {
+      "case_count": 107,
+      "commit_sha": "b6570edefb940857a7c334350656b29f9d984f24",
+      "downloaded_at": "2026-09-15T09:19:25+00:00",
+      "file_name": "agentclinic_medqa.jsonl",
+      "sha256": "d91038a2984f21bb1d43edd88c7958d090ef42ba80f5be487b22b903bf3a35ea",
+      "source_url": "https://raw.githubusercontent.com/SamuelSchmidgall/AgentClinic/b6570edefb940857a7c334350656b29f9d984f24/agentclinic_medqa.jsonl"
+    },
+    "agentclinic_medqa_extended.jsonl": {
+      "case_count": 214,
+      "commit_sha": "b6570edefb940857a7c334350656b29f9d984f24",
+      "downloaded_at": "2026-09-15T09:19:25+00:00",
+      "file_name": "agentclinic_medqa_extended.jsonl",
+      "sha256": "54a024eb2705c6c55d1988766adf4ab02ea7bbe2a28f843107b740032200f232",
+      "source_url": "https://raw.githubusercontent.com/SamuelSchmidgall/AgentClinic/b6570edefb940857a7c334350656b29f9d984f24/agentclinic_medqa_extended.jsonl"
+    }
+  },
+  "source_repo": "https://github.com/SamuelSchmidgall/AgentClinic"
+}

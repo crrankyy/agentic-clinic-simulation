@@ -1,0 +1,36 @@
+[project]
+name = "agentclinic"
+version = "0.0.0"
+description = "A from-scratch AgentClinic-style clinical encounter simulation (LangGraph + OpenRouter)"
+readme = "README.md"
+# D-007: the system Python is 3.14, which is ahead of much of the
+# LangChain/LangGraph wheel ecosystem. uv manages its own 3.12 interpreter.
+requires-python = ">=3.12,<3.13"
+
+# Phase 0 only needs an HTTP client. The *final* dependency list (langgraph,
+# langchain-core, pydantic, pyyaml, rich, a CLI library, ...) is still an open
+# question -- see docs/DECISIONS_OPEN.md. Exact versions are pinned by uv.lock.
+dependencies = [
+    "httpx>=0.28,<0.29",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+]
+
+[tool.uv]
+# No src/agentclinic package exists yet (D-008: directories are created only
+# when a phase needs them), so there is nothing to build or install. Flipped to
+# a real package in Phase 1.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# scripts/ is not a package; this lets tests import download_dataset directly.
+pythonpath = ["scripts"]
+markers = [
+    "live: touches a real network API; deselected by default (brief Section 11)",
+]
+# Brief Section 11: tests calling real APIs are skipped unless asked for.
+addopts = "-m 'not live' --strict-markers"

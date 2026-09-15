@@ -1,0 +1,26 @@
+# ---- Dataset ----------------------------------------------------------------
+# Decision 6 (2026-09-15): the upstream .jsonl files are NOT vendored. They are
+# fully reproducible from the pinned commit SHA + SHA-256 recorded in
+# dataset/MANIFEST.json, which IS tracked. splits.json is tracked so evaluation
+# splits can never silently differ between machines or re-runs.
+dataset/*.jsonl
+dataset/*.part
+!dataset/MANIFEST.json
+!dataset/splits.json
+
+# ---- Python -----------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# ---- Secrets ----------------------------------------------------------------
+.env
+
+# ---- Run outputs ------------------------------------------------------------
+runs/
+
+# ---- OS ---------------------------------------------------------------------
+.DS_Store
