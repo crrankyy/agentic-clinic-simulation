@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentClinic — encounter viewer</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>AgentClinic</h1>
+    <span class="sub">encounter viewer</span>
+  </div>
+  <div class="quota" id="quota" title="OpenRouter free-tier daily allowance"></div>
+</header>
+
+<p class="disclaimer" id="disclaimer">
+  Educational simulation only. Not medical advice.
+</p>
+
+<main>
+  <aside>
+    <section class="panel">
+      <h2>New encounter</h2>
+      <label for="case">Case</label>
+      <select id="case"></select>
+      <p class="objective" id="objective"></p>
+
+      <label for="config">Doctor configuration</label>
+      <select id="config">
+        <option value="panel">Panel — doctor, challenger, cost steward</option>
+        <option value="single_doctor">Single doctor</option>
+      </select>
+
+      <label for="turns">Max turns</label>
+      <input type="number" id="turns" value="20" min="1" max="20">
+
+      <button id="start">Start encounter</button>
+      <p class="cost-note" id="costNote"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Replay a past run</h2>
+      <select id="runs"><option value="">—</option></select>
+      <button id="replay" class="secondary">Replay</button>
+      <p class="hint">Replays stream through the same channel as a live run, and cost nothing.</p>
+    </section>
+
+    <section class="panel reveal" id="revealPanel" hidden>
+      <h2>Ground truth</h2>
+      <p class="hint">Held back until the encounter ends, and served on a separate
+        channel that the transcript never touches.</p>
+      <button id="revealBtn" class="secondary">Reveal the answer</button>
+      <div id="revealBody" hidden></div>
+    </section>
+  </aside>
+
+  <section class="stage">
+    <div class="statusbar">
+      <span class="dot" id="dot"></span>
+      <span id="status">Idle</span>
+      <span class="spacer"></span>
+      <span class="metric">turn <b id="turnNo">—</b></span>
+      <span class="metric"><b id="eventCount">0</b> events</span>
+    </div>
+    <div id="transcript" class="transcript">
+      <div class="empty">
+        <p>Pick a case and start an encounter, or replay a past run.</p>
+        <p class="hint">The doctor cannot see the diagnosis. Neither can this page,
+          until the encounter is over.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

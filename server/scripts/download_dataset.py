@@ -64,7 +64,7 @@ DATASET_FILES: tuple[DatasetFile, ...] = (
     DatasetFile("agentclinic_medqa.jsonl", 107),
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DATASET_DIR = REPO_ROOT / "dataset"
 MANIFEST_FILENAME = "MANIFEST.json"
 

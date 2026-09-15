@@ -57,6 +57,25 @@ class Tracer:
             "cost": cost, "latency_s": round(latency_s, 3), **fields,
         })
 
+    def event(self, *, case_id: str, event: Any, seq: int) -> None:
+        """Persist one encounter-transcript entry.
+
+        Until now events lived only in graph state and their aggregates only in
+        `results.csv`, so a crash in report generation lost the behaviour
+        telemetry outright and there was nothing to replay a run from. `seq` is
+        the index in `encounter_log`, which makes the stream replayable from an
+        arbitrary offset and makes duplicate writes detectable.
+
+        This is doctor-visible transcript content. It carries no ground truth —
+        the same events the doctor-side graph already holds — but it is written
+        to the per-case trace, never to `judge.jsonl`.
+        """
+        self._write(self._case_path(case_id), {
+            "kind": "event", "seq": seq, "turn": event.turn,
+            "event_kind": event.kind, "actor": event.actor,
+            "text": event.text, "meta": dict(event.meta),
+        })
+
     def tool_call(self, *, case_id: str, node: str, tool: str, **fields: Any) -> None:
         self._write(self._case_path(case_id), {"kind": "tool_call", "node": node, "tool": tool, **fields})
 

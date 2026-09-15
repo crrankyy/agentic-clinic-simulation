@@ -22,8 +22,7 @@ from .data.splits import build_splits, select_eval_subset, write_splits
 app = typer.Typer(add_completion=False, help="AgentClinic-from-scratch (educational simulation).")
 console = Console()
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-DATASET = ROOT / "dataset" / "agentclinic_medqa_extended.jsonl"
+from .paths import DATASET_FILE as DATASET, REPO_ROOT as ROOT
 
 DISCLAIMER = (
     "[bold]Educational simulation only.[/bold] Not medical advice. "
@@ -537,6 +536,28 @@ def trace(run_id: str, case_id: str) -> None:
         t.add_row(r["ts"][11:23], r["kind"], str(r.get("node", "")), str(detail)[:70],
                   tok, cost, str(r.get("latency_s", "")))
     console.print(t)
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="bind address"),
+    port: int = typer.Option(8000, help="port"),
+    reload: bool = typer.Option(False, "--reload", help="reload on source changes"),
+) -> None:
+    """Serve the encounter viewer: the API and the client, from one process.
+
+    Binds to loopback by default. This is a development viewer with no
+    authentication, and starting an encounter spends the account's OpenRouter
+    allowance, so exposing it on a public interface would let anyone drain it.
+    """
+    import uvicorn
+
+    console.print(DISCLAIMER)
+    console.print(f"[green]viewer: http://{host}:{port}/[/green]")
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        console.print("[yellow]warning: binding beyond loopback. There is no auth, "
+                      "and each encounter spends your OpenRouter allowance.[/yellow]")
+    uvicorn.run("agentclinic.api.app:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

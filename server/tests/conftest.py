@@ -9,7 +9,7 @@ import pytest
 from agentclinic.data.loader import load_cases
 from agentclinic.data.models import Case
 
-DATASET = Path(__file__).resolve().parent.parent / "dataset" / "agentclinic_medqa_extended.jsonl"
+from agentclinic.paths import DATASET_FILE as DATASET
 
 
 @pytest.fixture(scope="session")

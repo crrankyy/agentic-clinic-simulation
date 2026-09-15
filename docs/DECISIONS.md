@@ -992,3 +992,54 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
   distinction its own prompt depended on.
 - **Test:** `test_a_dangerous_alternative_reaches_the_orchestrator_with_its_likelihood`,
   verified to fail against the pre-fix rendering.
+
+## D-052 — The repo splits into `server/` and `client/`
+
+- **Date:** 2026-09-16
+- **Question:** Where does the pipeline live once a web UI exists alongside it?
+- **Decision:** `server/` holds the pipeline (`agentclinic/`, `config/`,
+  `scripts/`, `tests/`); `client/` holds the static UI. `dataset/`, `runs/` and
+  `docs/` stay at the repo root, because they are shared artefacts rather than
+  server implementation.
+- **Consequence:** every `Path(__file__).parent.parent.parent` in the tree
+  silently retargeted. Anchors now live in one module, `agentclinic.paths`, and
+  `server/tests/test_paths.py` asserts each one resolves.
+- **Why that test exists:** the package's own anchors failed loudly, but
+  `conftest.py` had its own copy and simply stopped finding the dataset — 111
+  tests became skips and the suite still reported success. A suite that quietly
+  stops testing is worse than one that breaks.
+
+## D-053 — The web app's isolation is enforced by route, not by UI code
+
+- **Date:** 2026-09-16
+- **Question:** A spectator UI is a different audience from the doctor and is
+  allowed to learn the answer once the encounter is over. How is that squared
+  with the rule that `Correct_Diagnosis` never travels with doctor-visible state?
+- **Options:** (a) send ground truth with the stream and have the UI hide it;
+  (b) send it at the end, in the terminal frame; (c) a separate route, refused
+  while the encounter runs.
+- **Decision:** (c), plus a whitelist wire format. `to_wire` names the fields it
+  copies and filters `meta` by key, so a new `Event` field is invisible to the
+  browser until someone adds it deliberately. `GET /runs/{id}/reveal` is the
+  only route with ground truth and answers 409 while status is `running`.
+- **Reason:** (a) is prompt-style isolation wearing a different hat — one render
+  bug leaks it. (b) still puts ground truth in a transcript payload, so any code
+  that logs or forwards a frame carries it. Under (c) the data is not in the
+  browser at all until a separate, gated request is made.
+- **Served set:** the three tested cases only, verified against
+  `select_eval_subset` at call time rather than hardcoded — an unserved case is
+  a 404, never a silent substitution.
+- **Test:** `server/tests/test_api.py`, including a live fake-model encounter
+  scanned for ground truth and asserted to replay byte-identically.
+
+## D-054 — Encounter events are persisted to the trace
+
+- **Date:** 2026-09-16
+- **Question:** Replay needs a transcript, and the Phase 4 notes left event
+  persistence open. Does it happen now?
+- **Decision:** Yes. `Tracer.event()` writes each `encounter_log` entry with its
+  `seq`; `run_case` persists the whole log, and the API's live path writes each
+  event as it streams. `rebuild_results` now prefers real events and falls back
+  to LLM-call approximation only for runs recorded before this.
+- **Reason:** the feature forced the decision that was open. It also closes
+  D-050's gap: a run's behaviour telemetry no longer dies with `results.csv`.

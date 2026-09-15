@@ -37,11 +37,43 @@ files are used — no code is copied or imported from that project.
 The `.jsonl` files are not committed. Fetch them with:
 
 ```bash
-uv run python scripts/download_dataset.py
+uv run python server/scripts/download_dataset.py
 ```
 
 Provenance (source URL, commit SHA, SHA-256, case count, download time) is
 recorded in `dataset/MANIFEST.json`, which *is* committed.
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `server/agentclinic/` | The pipeline: agents, graphs, LLM client, eval harness, CLI, API |
+| `server/config/` | Models, budgets, prompts, test synonyms and costs |
+| `server/tests/` | The offline test suite |
+| `client/` | The encounter viewer — static HTML/CSS/JS, no build step |
+| `dataset/`, `runs/`, `docs/` | Data, run artefacts and documentation, shared by both |
+
+Filesystem anchors live in `server/agentclinic/paths.py` and nowhere else.
+
+## The encounter viewer
+
+Watch a case unfold — the doctor questioning the patient, the gatekeeper
+returning results, and on the panel configuration the challenger and cost
+steward arguing with the doctor.
+
+```bash
+uv run python -m agentclinic.cli serve        # http://127.0.0.1:8000/
+```
+
+It serves the three tested cases (`medqa-0002`, `medqa-0009`, `medqa-0012`) and
+nothing else. Completed runs can be replayed from their traces, which streams
+through the same channel as a live run and spends no API allowance.
+
+The correct diagnosis is **not** sent to the browser while an encounter is
+running: the transcript stream carries doctor-visible events only, and ground
+truth lives on a separate route that refuses until the encounter has ended
+(D-053). The viewer has no authentication and starting an encounter spends your
+OpenRouter allowance, so it binds to loopback.
 
 ## Documentation
 

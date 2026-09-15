@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
+from .paths import CONFIG_DIR, REPO_ROOT  # noqa: F401  (re-exported)
 
 
 def _load(name: str, config_dir: Path | None = None) -> dict[str, Any]:
@@ -149,7 +149,7 @@ def load_dotenv(path: Path | None = None) -> list[str]:
     """
     import os
 
-    env_path = path or (CONFIG_DIR.parent / ".env")
+    env_path = path or (REPO_ROOT / ".env")
     if not env_path.exists():
         return []
     loaded: list[str] = []

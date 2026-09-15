@@ -147,6 +147,13 @@ async def run_case(
         return result
 
     events = state.get("encounter_log", [])
+    if tracer is not None:
+        # Persist the transcript. Without this the events exist only in graph
+        # state and their aggregates only in `results.csv`, so a crash in report
+        # generation loses the behaviour telemetry outright (D-050's gap) and
+        # there is nothing to replay the encounter from.
+        for seq, event in enumerate(events):
+            tracer.event(case_id=case.case_id, event=event, seq=seq)
     final = state.get("final")
     if final is not None and finals is not None:
         finals[case.case_id] = final.model_dump()
@@ -285,10 +292,13 @@ def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResu
     expensive half (hundreds of requests); the bookkeeping is derivable, so
     losing the CSV should not mean re-running them.
 
-    The encounter events are **not** persisted — they live only in graph state,
-    and `results.csv` was their only sink. So the behaviour counters here are
-    reconstructed from the per-node LLM calls and are strictly weaker than the
-    live ones:
+    Runs recorded from the event-persistence change onward carry their full
+    transcript in the trace, so the counters come back exact and
+    `behaviour_recovered` stays True.
+
+    For a run recorded **before** that, events existed only in graph state and
+    `results.csv` was their only sink. The counters are then reconstructed from
+    the per-node LLM calls and are strictly weaker than the live ones:
 
     * `patient_questions` is exact (`ask_patient` always calls the model).
     * `turns` and `tests_ordered` are **lower bounds**: the gatekeeper calls the
@@ -328,10 +338,22 @@ def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResu
             result.parse_failures = sum(1 for r in records if r.get("event") == "parse_failure")
             # One `check_stop` runs per executed action, and it is the sole
             # writer of `turn`, so counting action calls recovers the turn count.
-            result.patient_questions = sum(1 for r in calls if r.get("node") == "ask_patient")
-            result.tests_ordered = sum(1 for r in calls if r.get("node") == "gatekeeper")
-            result.turns = sum(1 for r in calls if r.get("node") in
-                               {"ask_patient", "gatekeeper", "search_literature"})
-        result.behaviour_recovered = False
+            persisted = [r for r in records if r.get("kind") == "event"]
+            if persisted:
+                # The transcript survived, so the counters are the real ones.
+                events = [Event(turn=r["turn"], kind=r["event_kind"],
+                                actor=r["actor"], text=r["text"],
+                                meta=r.get("meta") or {}) for r in persisted]
+                for key, value in _derive(events).items():
+                    setattr(result, key, value)
+                result.turns = max((e.turn for e in events), default=0)
+            else:
+                # A run recorded before events were persisted. Approximate, and
+                # say so — see `behaviour_recovered` below.
+                result.patient_questions = sum(1 for r in calls if r.get("node") == "ask_patient")
+                result.tests_ordered = sum(1 for r in calls if r.get("node") == "gatekeeper")
+                result.turns = sum(1 for r in calls if r.get("node") in
+                                   {"ask_patient", "gatekeeper", "search_literature"})
+                result.behaviour_recovered = False
         out.append(result)
     return sorted(out, key=lambda r: r.case_id)
