@@ -271,3 +271,49 @@ def write_results_csv(results: Sequence[CaseResult], path: Path) -> None:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0]) if rows else [])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResult]:
+    """Reconstruct per-case results from `finals.json` plus the traces.
+
+    For when a run's encounters completed but `results.csv` was never written —
+    a crash in report generation, an interrupted process. The encounters are the
+    expensive half (hundreds of requests); the bookkeeping is derivable, so
+    losing the CSV should not mean re-running them.
+
+    Counts come from the trace's own event records, so they are the same numbers
+    the live path would have produced.
+    """
+    import json
+
+    finals = json.loads((run_dir / "finals.json").read_text(encoding="utf-8"))
+    out: list[CaseResult] = []
+    for case_id, answer in finals.items():
+        case = cases_by_id.get(case_id)
+        result = CaseResult(
+            case_id=case_id, outcome="scored",
+            diagnosis=answer.get("diagnosis", ""),
+            final_confidence=float(answer.get("confidence", 0.0)),
+            abstained=bool(answer.get("abstain")),
+            differential=[d["diagnosis"] for d in answer.get("differential", [])],
+            dx_in_results=bool(case.dx_in_results) if case else False,
+            dx_tokens_in_results=bool(case.dx_tokens_in_results) if case else False,
+        )
+        if result.abstained:
+            result.outcome = "abstained"
+
+        trace = run_dir / "traces" / f"{case_id}.jsonl"
+        if trace.exists():
+            records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+            calls = [r for r in records if r.get("kind") == "llm_call"]
+            result.latency_s = sum(r.get("latency_s", 0.0) for r in calls)
+            result.api_cost_usd = sum(r.get("cost") or 0.0 for r in calls)
+            result.parse_failures = sum(1 for r in records if r.get("event") == "parse_failure")
+            # One `check_stop` runs per executed action, and it is the sole
+            # writer of `turn`, so counting action calls recovers the turn count.
+            result.patient_questions = sum(1 for r in calls if r.get("node") == "ask_patient")
+            result.tests_ordered = sum(1 for r in calls if r.get("node") == "gatekeeper")
+            result.turns = sum(1 for r in calls if r.get("node") in
+                               {"ask_patient", "gatekeeper", "search_literature"})
+        out.append(result)
+    return sorted(out, key=lambda r: r.case_id)

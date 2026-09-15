@@ -342,8 +342,7 @@ def run(
 
     meta = RunMetadata(
         run_id=run_id, config_name=config, model=models.for_role("orchestrator"),
-        judge_model=("manual (hand-assigned, not a model)" if manual
-                     else models.judge.model),
+        judge_model=models.judge.model,
         provider_pin=",".join(models.provider.pin),
         fallbacks=models.provider.allow_fallbacks, cache_enabled=cache,
         structured_output_mode=models.structured_output_method, enabled_actions=tuple(sorted(enabled)),
@@ -382,8 +381,8 @@ def judge(
 
     run_dir = ROOT / "runs" / run_id
     finals_path, results_path = run_dir / "finals.json", run_dir / "results.csv"
-    if not finals_path.exists() or not results_path.exists():
-        console.print(f"[red]{run_dir} has no finals.json/results.csv to judge[/red]")
+    if not finals_path.exists():
+        console.print(f"[red]{run_dir} has no finals.json to judge[/red]")
         raise typer.Exit(1)
 
     finals = json.loads(finals_path.read_text(encoding="utf-8"))
@@ -393,8 +392,20 @@ def judge(
     if verdicts is not None:
         manual = json.loads(Path(verdicts).read_text(encoding="utf-8"))
         console.print(f"[yellow]manual verdicts: {len(manual)} cases, no model call[/yellow]")
-    rows = list(csv.DictReader(results_path.open(encoding="utf-8")))
-    store = CaseStore(load_cases(DATASET))
+    all_cases = load_cases(DATASET)
+    store = CaseStore(all_cases)
+    if results_path.exists():
+        rows = list(csv.DictReader(results_path.open(encoding="utf-8")))
+    else:
+        # The encounters completed but the CSV was never written -- a crash in
+        # report generation, say. Recover rather than re-run: the answers are
+        # the expensive part and they survived.
+        from .eval.runner import rebuild_results
+
+        rebuilt = rebuild_results(run_dir, {c.case_id: c for c in all_cases})
+        console.print(f"[yellow]results.csv missing — rebuilt {len(rebuilt)} rows "
+                      "from finals.json and traces[/yellow]")
+        rows = [r.row() for r in rebuilt]
     models = load_models()
     tracer = Tracer(run_dir=run_dir)
     judge_agent = Judge(model=models.judge.model,
@@ -402,6 +413,12 @@ def judge(
                         require_subscription=models.judge.auth == "subscription")
     if not manual:
         console.print(f"[dim]judge auth: {judge_agent.auth_mode()}[/dim]")
+
+    def as_bool(value: Any) -> bool:
+        """Rows come from a CSV (strings) or from `rebuild_results` (real types)."""
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"true", "1", "yes"}
 
     async def main() -> list[CaseResult]:
         out: list[CaseResult] = []
@@ -414,14 +431,16 @@ def judge(
                 setattr(r, key, int(float(row.get(key) or 0)))
             for key in ("test_cost_usd", "api_cost_usd", "final_confidence", "latency_s"):
                 setattr(r, key, float(row.get(key) or 0))
-            r.forced_stop = (row.get("forced_stop") or "").lower() == "true"
-            r.dx_in_results = (row.get("dx_in_results") or "").lower() == "true"
-            r.dx_tokens_in_results = (row.get("dx_tokens_in_results") or "").lower() == "true"
-            r.abstained = (row.get("abstained") or "").lower() == "true"
-            r.match_tiers = dict(
-                part.split("=") for part in (row.get("match_tiers") or "").split(";") if "=" in part
-            )
-            r.match_tiers = {k: int(v) for k, v in r.match_tiers.items()}
+            r.forced_stop = as_bool(row.get("forced_stop"))
+            r.dx_in_results = as_bool(row.get("dx_in_results"))
+            r.dx_tokens_in_results = as_bool(row.get("dx_tokens_in_results"))
+            r.abstained = as_bool(row.get("abstained"))
+            tiers = row.get("match_tiers") or ""
+            if isinstance(tiers, dict):
+                r.match_tiers = {k: int(v) for k, v in tiers.items()}
+            else:
+                r.match_tiers = {k: int(v) for k, v in
+                                 (p.split("=") for p in tiers.split(";") if "=" in p)}
 
             answer = finals.get(r.case_id)
             if answer is None or r.abstained:

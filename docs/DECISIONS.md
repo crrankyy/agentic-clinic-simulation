@@ -945,3 +945,20 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
 - **Note:** PLAN.md §2.3's `input_schema` list carried the same omission — the
   defect was inherited from the plan, not invented in Phase 4. The plan is
   corrected.
+
+## D-050 — A run's results are recoverable from `finals.json` and traces
+
+- **Date:** 2026-09-15
+- **Question:** The first live panel run completed all 232 encounters and then
+  crashed in report generation (`NameError: name 'manual' is not defined` — a
+  `judge`-only variable referenced in `run`). `results.csv` was never written.
+- **Decision:** `rebuild_results()` reconstructs per-case results from
+  `finals.json` plus the per-case traces, and `judge` uses it automatically when
+  `results.csv` is absent. Row parsing accepts both CSV strings and real Python
+  types, since the two paths produce different ones.
+- **Reason:** the encounters are the expensive half — 232 requests against a
+  1000/day allowance, ~27 minutes of wall clock — while the bookkeeping is
+  derivable from artefacts that survived. Losing a formatting step should not
+  cost a re-run. The counts come from the traces' own records, so they are the
+  same numbers the live path would have produced.
+- **Note:** this is the second time `finals.json` (D-047) has paid for itself.
