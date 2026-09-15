@@ -97,9 +97,26 @@ matters for the Section 5.5 judge: exact string comparison is unusable.
 > accuracy over all 214 *and* over the 187 leak-free cases. Not fixable by state
 > design, so it is measured rather than hidden.
 
-In **27 of 214 cases (12.6%)** the exact `Correct_Diagnosis` string appears
-verbatim inside `Physical_Examination_Findings` / `Test_Results` — the fields
-the gatekeeper is designed to hand to the doctors. Examples:
+> **[corrected 2026-09-15, PLAN_REVIEW #8]** The original figure below said
+> "27 ... in `Physical_Examination_Findings` / `Test_Results`". Both details
+> were wrong. The count depends on the matching rule, and the string appears in
+> **zero** `Physical_Examination_Findings` — all occurrences are in
+> `Test_Results`.
+>
+> | Matching rule | Count |
+> |---|---:|
+> | values only, case-insensitive | 27 |
+> | keys + values, case-insensitive | 28 |
+> | keys + values, abbreviation stripped | **29 ← the rule now used** |
+>
+> The gatekeeper returns the matched key *and* its value, so keys must be
+> matched: case 154 (`Varicella`) has the key `Varicella_Specific_Tests`. And
+> case 104 (`Legg-Calvé-Perthes disease (LCPD)`) appears without its `(LCPD)`
+> suffix. `dx_in_results` is now a computed value, never a literal.
+
+In **29 of 214 cases (13.6%)** the exact `Correct_Diagnosis` string appears
+verbatim inside `Test_Results` — the field the gatekeeper is designed to hand
+to the doctors. Examples:
 
 - line 3, dx `Hirschsprung disease` → `barium_enema.findings`:
   *"a transition zone in the distal colon, compatible with **hirschsprung disease**"*
@@ -145,7 +162,8 @@ fast dev subset.
 | Issue | Count | Lines |
 |---|---:|---|
 | `Test_Results` is `{}` (no tests at all) | 4 | 69, 106, 111, 209 |
-| `Test_Results` maps key → plain string, not a nested dict | 2 | 150, 187 |
+| `Test_Results` has **any** top-level string value *[corrected: 16, not 2]* | 16 | 14 mixed str/dict + 150, 187 all-string |
+| `Test_Results` contains a list somewhere | 2 | 153, 185 |
 | `Patient_Actor` missing `Past_Medical_History` | 1 | 120 |
 | `Patient_Actor.Symptoms` is `{}` (no `Primary_Symptom`) | 1 | 132 |
 | Undocumented `Patient_Actor` keys: `Current_Medications` (5), `Medications` (2), `Drug_History` (1), `Family_History` (1) | 9 | 18, 21, 26, 43, 77, 98, 132, 179, 191 |
@@ -163,5 +181,8 @@ handle deliberately.
 - Four cases have no test results at all, so "order a test" must have a defined
   behaviour even when the case offers nothing.
 - The 107-case file buys no additional coverage whatsoever.
+- **[added 2026-09-15]** Duplicate-diagnosis grouping must normalise case:
+  31 strings over 63 cases raw, but **35 over 72** case-insensitively. Five
+  diagnoses differ only in capitalisation.
 - uv publishes no x86_64 macOS bottle, so `brew install uv` tried to compile
   LLVM from source (see D-014).
