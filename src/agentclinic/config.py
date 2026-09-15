@@ -33,6 +33,7 @@ class JudgeConfig:
     sdk: str
     model: str
     max_calls_per_run: int
+    auth: str = "subscription"
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,8 @@ def load_models(config_dir: Path | None = None) -> ModelConfig:
         ),
         roles=dict(raw["roles"]),
         judge=JudgeConfig(sdk=j["sdk"], model=j["model"],
-                          max_calls_per_run=int(j["max_calls_per_run"])),
+                          max_calls_per_run=int(j["max_calls_per_run"]),
+                          auth=j.get("auth", "subscription")),
         structured_output_method=(raw.get("structured_output") or {}).get(
             "method", "function_calling"),
     )

@@ -835,3 +835,23 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
   at all** — only `electrocardiogram`/ECG, a different test), plus mammography,
   nerve conduction, creatinine, CRP and ESR. The gatekeeper now records the
   request text in the trace, because this gap was invisible without it.
+
+## D-046 — The judge refuses API-key billing unless explicitly allowed
+
+- **Date:** 2026-09-15
+- **Question:** D-021 chose the user's Claude **subscription** via
+  `ant auth login`. But the Anthropic SDK resolves credentials in a fixed order:
+  `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN`, then the OAuth profile. An
+  API key appearing in the environment — from a shell profile, another project,
+  a CI variable — would **silently** take precedence and bill per token.
+- **Decision:** `config/models.yaml` gains `judge.auth: subscription`. Under
+  that policy the judge **refuses to start** if either environment variable is
+  set, naming which one and how to proceed. `judge.auth: any` opts back in to
+  API billing deliberately. The resolved mode is printed before judging and is
+  recorded in run metadata.
+- **Reason:** the failure mode is silent and financial. Nothing in the run would
+  look different; the first sign would be an invoice. A policy that fails loudly
+  is worth more than a comment saying which credential is intended.
+- **Note:** this enforces *which credential is used*. Exactly how Anthropic
+  meters subscription-authenticated inference is their billing arrangement, not
+  something this project can assert.

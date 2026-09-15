@@ -39,3 +39,8 @@ judge:
   sdk: anthropic
   model: claude-opus-5
   max_calls_per_run: 200          # D-037
+  # D-046: "subscription" refuses to run if ANTHROPIC_API_KEY or
+  # ANTHROPIC_AUTH_TOKEN is set, because the SDK would silently prefer either
+  # over the `ant auth login` profile and bill per token. Set to "any" to allow
+  # API-key billing deliberately.
+  auth: subscription

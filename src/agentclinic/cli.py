@@ -288,7 +288,8 @@ def run(
                        structured_method=models.structured_output_method,
                        call_timeout=budgets.timeout_seconds)
     judge = Judge(model=models.judge.model,
-                  max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer)
+                  max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer,
+                  require_subscription=models.judge.auth == "subscription")
 
     def build_graph(case_id: str) -> Any:
         return build_single_doctor_graph(
@@ -368,7 +369,9 @@ def judge(run_id: str) -> None:
     models = load_models()
     tracer = Tracer(run_dir=run_dir)
     judge_agent = Judge(model=models.judge.model,
-                        max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer)
+                        max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer,
+                        require_subscription=models.judge.auth == "subscription")
+    console.print(f"[dim]judge auth: {judge_agent.auth_mode()}[/dim]")
 
     async def main() -> list[CaseResult]:
         out: list[CaseResult] = []

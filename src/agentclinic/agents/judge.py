@@ -23,6 +23,10 @@ from ..data.views import JudgeView
 from ..graphs.schemas import FinalAnswer, JudgeVerdict
 
 
+class JudgeAuthMode(RuntimeError):
+    """The judge would have used a credential the project does not want."""
+
+
 class JudgeParseFailure(RuntimeError):
     """The judge produced no usable verdict. Never synthesised into one."""
 
@@ -53,22 +57,56 @@ class Judge:
         client: Any = None,
         tracer: Any = None,
         config_dir: Path | None = None,
+        require_subscription: bool = True,
     ) -> None:
         self.model = model
         self.max_calls_per_run = max_calls_per_run
         self._client = client
         self.tracer = tracer
         self.config_dir = config_dir
+        #: D-046: refuse to fall back to API-key billing without it being asked for.
+        self.require_subscription = require_subscription
         self.calls = 0
         self.tokens_in = 0
         self.tokens_out = 0
+
+    def auth_mode(self) -> str:
+        """Which credential the SDK will actually use, resolved the same way it does.
+
+        The order is fixed by the SDK: `ANTHROPIC_API_KEY`, then
+        `ANTHROPIC_AUTH_TOKEN`, then the OAuth profile written by `ant auth
+        login`. That order is why this check exists — an API key appearing in the
+        environment would silently take precedence over the subscription profile,
+        and the first sign would be a bill.
+        """
+        import os
+
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            return "api_key"
+        if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+            return "auth_token"
+        profile_dir = Path.home() / ".config" / "anthropic"
+        if (profile_dir / "configs").exists() or (profile_dir / "credentials.json").exists():
+            return "oauth_profile"
+        return "none"
 
     def _ensure_client(self) -> Any:
         if self._client is None:
             from anthropic import AsyncAnthropic
 
-            # Credentials resolve from ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-            # or an `ant auth login` profile — a bare constructor is correct.
+            mode = self.auth_mode()
+            if self.require_subscription and mode in {"api_key", "auth_token"}:
+                raise JudgeAuthMode(
+                    f"the judge is configured for subscription auth, but the SDK would "
+                    f"use {mode} because that environment variable is set. Unset it, or "
+                    f"set judge.auth: any in config/models.yaml to allow API billing."
+                )
+            if mode == "none":
+                raise JudgeAuthMode(
+                    "no Anthropic credential found. Run `ant auth login` in a terminal "
+                    "(it opens a browser and must not be backgrounded)."
+                )
+            # A bare constructor resolves the OAuth profile — no key needed.
             self._client = AsyncAnthropic()
         return self._client
 

@@ -212,3 +212,40 @@ async def test_a_call_timeout_is_treated_as_transient_not_as_bad_content(cases):
     assert _looks_empty(asyncio.TimeoutError())
     assert _looks_empty(TimeoutError())
     assert not _looks_empty(ValueError("field required"))
+
+
+def test_judge_refuses_api_key_billing_when_configured_for_subscription(monkeypatch):
+    """D-046: the SDK prefers an API key over the OAuth profile, silently.
+
+    Without this guard, an ANTHROPIC_API_KEY appearing in the environment would
+    quietly switch the judge from subscription auth to per-token billing, and the
+    first sign would be an invoice.
+    """
+    from agentclinic.agents.judge import Judge, JudgeAuthMode
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    judge = Judge(require_subscription=True)
+    assert judge.auth_mode() == "api_key"
+    with pytest.raises(JudgeAuthMode, match="configured for subscription auth"):
+        judge._ensure_client()
+
+
+def test_judge_allows_api_key_when_explicitly_permitted(monkeypatch):
+    """The refusal is a policy, not a prohibition — it can be opted out of."""
+    from agentclinic.agents.judge import Judge
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    judge = Judge(require_subscription=False)
+    assert judge._ensure_client() is not None
+
+
+def test_judge_reports_a_missing_credential_clearly(monkeypatch):
+    from agentclinic.agents.judge import Judge, JudgeAuthMode
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr("pathlib.Path.exists", lambda self: False)
+    judge = Judge(require_subscription=True)
+    assert judge.auth_mode() == "none"
+    with pytest.raises(JudgeAuthMode, match="ant auth login"):
+        judge._ensure_client()
