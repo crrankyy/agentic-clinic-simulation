@@ -62,10 +62,15 @@ class CaseResult:
     dx_in_results: bool = False
     dx_tokens_in_results: bool = False
     error: str | None = None
+    #: The ordered differential, kept so the judge can be re-run later without
+    #: re-running the encounter. `results.csv` gets the names; `finals.json`
+    #: keeps the whole answer.
+    differential: list[str] = field(default_factory=list)
 
     def row(self) -> dict[str, Any]:
         out = asdict(self)
         out["match_tiers"] = ";".join(f"{k}={v}" for k, v in sorted(self.match_tiers.items()))
+        out["differential"] = " | ".join(self.differential)
         return out
 
 
@@ -105,8 +110,16 @@ async def run_case(
     tracer: Any = None,
     guards: Any = None,
     caller: Any = None,
+    finals: dict[str, Any] | None = None,
+    case_deadline_s: float | None = None,
 ) -> CaseResult:
-    """Run one encounter and judge it. Never raises — a crash becomes a result."""
+    """Run one encounter and judge it. Never raises — a crash becomes a result.
+
+    `case_deadline_s` is defence in depth behind `LLMCaller.call_timeout`. The
+    turn cap bounds *turns*, not wall-clock: a provider that trickles bytes can
+    hold a call open indefinitely, and 20 turns of that is unbounded. One hung
+    case must not hold up a run.
+    """
     started = time.monotonic()
     result = CaseResult(
         case_id=case.case_id, outcome="crash",
@@ -115,10 +128,12 @@ async def run_case(
     try:
         graph = build_graph(case.case_id)
         view = store.doctor_view(case.case_id)
-        state = await graph.ainvoke(
+        coro = graph.ainvoke(
             new_state(case.case_id, view.objective_for_doctor),
             {"recursion_limit": recursion_limit},
         )
+        state = await (asyncio.wait_for(coro, timeout=case_deadline_s)
+                       if case_deadline_s else coro)
     except Exception as exc:  # noqa: BLE001 — a crash is a recorded outcome
         result.error = f"{type(exc).__name__}: {exc}"[:400]
         result.latency_s = time.monotonic() - started
@@ -129,6 +144,8 @@ async def run_case(
 
     events = state.get("encounter_log", [])
     final = state.get("final")
+    if final is not None and finals is not None:
+        finals[case.case_id] = final.model_dump()
     result.stop_reason = state.get("stop_reason")
     result.forced_stop = result.stop_reason not in (None, "finalize")
     result.turns = int(state.get("turn", 0))
@@ -153,6 +170,7 @@ async def run_case(
         result.abstained = bool(final.abstain)
         result.diagnosis = final.diagnosis
         result.final_confidence = float(final.confidence)
+        result.differential = [d.diagnosis for d in final.differential]
     elif final.abstain:
         result.outcome = "abstained"
         result.abstained = True
@@ -161,6 +179,7 @@ async def run_case(
         result.outcome = "scored"
         result.diagnosis = final.diagnosis
         result.final_confidence = float(final.confidence)
+        result.differential = [d.diagnosis for d in final.differential]
         if judge is not None:
             try:
                 verdict = await judge.verdict(
@@ -200,6 +219,8 @@ async def run_evaluation(
     tracer: Any = None,
     guards: Any = None,
     caller: Any = None,
+    finals: dict[str, Any] | None = None,
+    case_deadline_s: float | None = None,
 ) -> list[CaseResult]:
     """Run every case, bounded by a semaphore. Results come back in case order."""
     semaphore = asyncio.Semaphore(concurrency)
@@ -208,7 +229,8 @@ async def run_evaluation(
         async with semaphore:
             return await run_case(case=case, store=store, build_graph=build_graph,
                                   judge=judge, recursion_limit=recursion_limit,
-                                  tracer=tracer, guards=guards, caller=caller)
+                                  tracer=tracer, guards=guards, caller=caller,
+                                  finals=finals, case_deadline_s=case_deadline_s)
 
     # return_exceptions keeps one pathological case from cancelling its siblings;
     # run_case already contains its own failures, so this is belt and braces.
@@ -223,6 +245,21 @@ async def run_evaluation(
         else:
             results.append(item)
     return sorted(results, key=lambda r: r.case_id)
+
+
+def write_finals(finals: dict[str, Any], path: Path) -> None:
+    """Persist the full final answers.
+
+    Judging is the only step that needs an Anthropic credential, and encounters
+    are by far the expensive half — ~180 OpenRouter requests against a 1000/day
+    allowance. Keeping the answers means a missing credential costs three judge
+    calls to recover from, not a whole re-run.
+    """
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(finals, indent=2, ensure_ascii=False, default=str) + "\n",
+                    encoding="utf-8")
 
 
 def write_results_csv(results: Sequence[CaseResult], path: Path) -> None:

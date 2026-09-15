@@ -742,3 +742,96 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
   variable *names* are echoed, never values.
 - **Reason:** The brief requires `.env.example`; this makes it functional rather
   than decorative, and keeps secrets out of both the repository and the logs.
+
+## D-043 — Agent model switched to `inclusionai/ling-3.0-flash-vl:free` (supersedes D-020)
+
+- **Date:** 2026-09-15
+- **Question:** `nvidia/nemotron-3-super-120b-a12b:free` passed the Phase 1 spike
+  on a flat schema but performed badly under load. Is there a better free model?
+- **Measured, live, against the real `HypothesisUpdate` (nested differential):**
+
+  | model | success | median | note |
+  |---|---|---|---|
+  | `inclusionai/ling-3.0-flash-vl:free` | **2/2** | **10.0s** | 8 dx, nested objects intact |
+  | `dots-studio/dots-3-note-preview:free` | 2/2 | 14.8s | top-1 probability 1.0 — poorly calibrated |
+  | `nvidia/nemotron-3-super-120b-a12b:free` | **0/2** | 75.1s | empty responses |
+  | `nex-agi/nex-n2.5-pro:free` | 0/2 | 150s | timeout |
+
+  A full 6-turn encounter on nemotron needed **17 empty-response backoffs across
+  37 calls** — 46% of calls refused — and crashed outright before backoff existed.
+- **Decision:** switch every OpenRouter role to
+  **`inclusionai/ling-3.0-flash-vl:free`**, provider pinned to **Novita** (its
+  only endpoint), with structured output by **forced tool call**.
+- **Reason:** It is roughly 4× faster on a flat schema (4s vs 15s), held the
+  nested schema where nemotron failed completely, and showed no load-shedding.
+  Its clinical output was also sensible — "paraneoplastic cerebellar
+  degeneration" as the leader for ataxia with a smoking history.
+- **⚠️ Mechanism change.** This model has `tools` and `tool_choice` but **no**
+  `structured_outputs` and **no** `response_format`. Schemas are therefore
+  enforced by a forced tool call, not a native strict schema. That is the second
+  rung of the Q-15 fallback ladder, now the primary mechanism, declared in
+  `config/models.yaml` under `structured_output.method` and recorded per run.
+- **Rejected alternatives the user asked about:**
+  - `thinkingmachines/inkling:free` and `inkling-small:free` — **HTTP 403**,
+    `failed_routing_step: "Gate Free Endpoints by Agentic Harness"`. Restricted
+    to allow-listed client apps; unreachable from our own API client.
+  - `z-ai/glm-5.2:free` — reachable but 32k context (vs 1M paid), **no tools, no
+    response_format, no structured outputs**, so prompt-and-parse only; returned
+    HTTP 503 when tested.
+- **Supersedes:** D-020 (model choice) and the provider half of D-030.
+
+## D-044 — Hard wall-clock deadlines on every call and every case
+
+- **Date:** 2026-09-15
+- **Question:** A 3-case run made no progress for **65 minutes** while the
+  process stayed alive. Diagnosis (from `lsof` + `sample`): two ESTABLISHED
+  sockets to OpenRouter and an event loop pumping an async generator — the
+  provider was trickling bytes on an open stream.
+- **Root cause:** `httpx` timeouts are **per-operation**, not total. A read
+  timeout fires only after that long with *no* data arriving; a slow trickle
+  resets the timer indefinitely. The design bounded **turns** (Q-24) and
+  **spend** (Q-25) and **requests** (review #13) — but nothing bounded
+  **wall-clock time**, and on a free model the spend cap is inert anyway.
+- **Decision:** three changes.
+  1. `LLMCaller` wraps every call in `asyncio.wait_for(..., call_timeout)` — a
+     hard total deadline, default `budgets.timeout_seconds`.
+  2. `ChatOpenAI` is constructed with **`max_retries=0`**. SDK-internal retries
+     would multiply the deadline by `(max_retries + 1)` invisibly; the repair
+     loop owns retries so the ceiling is knowable.
+  3. `run_case` accepts `case_deadline_s` as defence in depth, set to
+     `max_turns × 6 × timeout_seconds`. A case that cannot finish in that long
+     is stuck, and one stuck case must not hold up a run.
+- **Also:** a timeout is classified as a **transient** failure, not a content
+  failure — it backs off and resends rather than re-prompting. Re-prompting a
+  provider that is not answering achieves nothing.
+- **Reason:** without a total deadline the turn cap is not a stop condition at
+  all in wall-clock terms, which contradicts PLAN.md §5's claim that every
+  encounter terminates. Regression tests cover both the case deadline and the
+  timeout classification.
+
+## D-045 — Gatekeeper matches by token containment (extends Q-11, D-034)
+
+- **Date:** 2026-09-15
+- **Question:** A live 3-case run resolved **14 of 17** test requests through the
+  LLM tier and **zero** through exact or synonym matching. The 141-alias table
+  never fired once.
+- **Cause:** tiers 1 and 2 required equality after normalisation. Case keys are
+  terse (`MRI_Brain`, `Complete_Blood_Count`, `Electroencephalogram`) while a
+  doctor asks in clinical language — "MRI of the brain with contrast", "CBC with
+  differential", "complete blood count with differential". Every qualifier
+  defeated the match.
+- **Decision:** add **token containment**: a key matches when all of its
+  normalised tokens appear in the request. Applied to case keys (tier
+  `contains`) and to synonym aliases, so "CBC with differential" canonicalises
+  through the alias fragment. Ambiguity is resolved by preferring the key with
+  more tokens, and a tie falls through to the LLM tier rather than guessing.
+- **Why this is not the fuzzy tier D-034 removed:** there is **no threshold**.
+  Containment is exact set inclusion — deterministic, explainable, and directional:
+  `{mri, spine}` is not a subset of `{mri, of, the, brain}`, so a request for a
+  brain MRI can never return a spine MRI.
+- **Measured:** 8 of 10 realistic phrasings now resolve deterministically where
+  0 did before, with genuinely absent tests still correctly unmatched.
+- **Also:** the synonym table gained `electroencephalogram` (**EEG had no entry
+  at all** — only `electrocardiogram`/ECG, a different test), plus mammography,
+  nerve conduction, creatinine, CRP and ESR. The gatekeeper now records the
+  request text in the trace, because this gap was invisible without it.

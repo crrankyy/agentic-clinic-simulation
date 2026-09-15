@@ -135,8 +135,11 @@ def play(
             pin_provider=models.provider.pin,
             allow_fallbacks=models.provider.allow_fallbacks,
             attribution_title=models.provider.attribution_title,
-        ).with_config(callbacks=[recorder])
-        patient = Patient(store.patient_view(case_id), LLMCaller(model, recorder=recorder))
+        )
+        patient = Patient(store.patient_view(case_id),
+                          LLMCaller(model, recorder=recorder,
+                                    structured_method=models.structured_output_method,
+                       call_timeout=budgets.timeout_seconds))
 
     graph = build_interactive_graph(
         patient=patient,
@@ -202,7 +205,7 @@ def run(
     from .data.splits import select_eval_subset
     from .data.views import CaseStore
     from .eval.report import RunMetadata, render, write_report
-    from .eval.runner import run_evaluation, write_results_csv
+    from .eval.runner import run_evaluation, write_finals, write_results_csv
     from .graphs.schemas import make_orchestrator_decision
     from .graphs.single_doctor import build_single_doctor_graph
     from .llm.guards import DailyRequestCounter, RunGuards, SpendTracker, TokenBucket
@@ -273,13 +276,17 @@ def run(
             allow_fallbacks=models.provider.allow_fallbacks,
             attribution_title=models.provider.attribution_title,
             timeout=budgets.timeout_seconds,
-            max_retries=budgets.retry_attempts,
-        ).with_config(callbacks=[recorder])
+            # 0: LLMCaller owns retries. SDK-internal retries would multiply
+            # the wall-clock deadline by (max_retries + 1) invisibly.
+            max_retries=0,
+        )  # callbacks are attached per invocation by LLMCaller
     except MissingCredentials as exc:
         console.print(f"[red]{exc}[/red]")
         console.print("[dim]export OPENROUTER_API_KEY=... and try again[/dim]")
         raise typer.Exit(1) from None
-    caller = LLMCaller(chat, guards=guards, recorder=recorder, tracer=tracer)
+    caller = LLMCaller(chat, guards=guards, recorder=recorder, tracer=tracer,
+                       structured_method=models.structured_output_method,
+                       call_timeout=budgets.timeout_seconds)
     judge = Judge(model=models.judge.model,
                   max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer)
 
@@ -297,11 +304,17 @@ def run(
             max_turns=budgets.max_turns, guards=guards,
         )
 
+    finals: dict[str, Any] = {}
     results = asyncio.run(run_evaluation(
         cases=selected, store=store, build_graph=build_graph, judge=judge,
         recursion_limit=budgets.recursion_limit, concurrency=budgets.concurrency,
-        tracer=tracer, guards=guards, caller=caller,
+        tracer=tracer, guards=guards, caller=caller, finals=finals,
+        # Generous, but finite: a case that cannot finish in this long is stuck.
+        case_deadline_s=budgets.max_turns * 6 * budgets.timeout_seconds,
     ))
+    # Written even for --no-report: the encounters are the expensive half, and
+    # keeping their answers is what makes `judge <run_id>` cheap.
+    write_finals(finals, run_dir / "finals.json")
 
     for r in results:
         console.print(f"  {r.case_id}  {r.outcome:9s} {r.match_type or '—':9s} "
@@ -315,12 +328,111 @@ def run(
         run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
         judge_model=models.judge.model, provider_pin=",".join(models.provider.pin),
         fallbacks=models.provider.allow_fallbacks, cache_enabled=cache,
-        structured_output_mode="strict", enabled_actions=tuple(sorted(enabled)),
+        structured_output_mode=models.structured_output_method, enabled_actions=tuple(sorted(enabled)),
         max_turns=budgets.max_turns, split=split,
     )
     write_report(render(results, meta), run_dir / "report.md")
     write_results_csv(results, run_dir / "results.csv")
     console.print(f"[green]report: {run_dir / 'report.md'}[/green]")
+
+
+@app.command()
+def judge(run_id: str) -> None:
+    """Judge a completed run's stored answers, without re-running encounters.
+
+    Judging needs an Anthropic credential; encounters need ~180 OpenRouter
+    requests. Separating them means a missing `ant auth login` costs three judge
+    calls to recover from rather than a whole re-run.
+    """
+    import asyncio
+    import csv
+    import json
+
+    from .agents.judge import Judge, top_k
+    from .config import load_models
+    from .data.views import CaseStore
+    from .eval.report import RunMetadata, render, write_report
+    from .eval.runner import CaseResult, write_results_csv
+    from .graphs.schemas import FinalAnswer
+    from .tracing import Tracer
+
+    run_dir = ROOT / "runs" / run_id
+    finals_path, results_path = run_dir / "finals.json", run_dir / "results.csv"
+    if not finals_path.exists() or not results_path.exists():
+        console.print(f"[red]{run_dir} has no finals.json/results.csv to judge[/red]")
+        raise typer.Exit(1)
+
+    finals = json.loads(finals_path.read_text(encoding="utf-8"))
+    rows = list(csv.DictReader(results_path.open(encoding="utf-8")))
+    store = CaseStore(load_cases(DATASET))
+    models = load_models()
+    tracer = Tracer(run_dir=run_dir)
+    judge_agent = Judge(model=models.judge.model,
+                        max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer)
+
+    async def main() -> list[CaseResult]:
+        out: list[CaseResult] = []
+        for row in rows:
+            r = CaseResult(case_id=row["case_id"], outcome=row["outcome"])
+            for key, cast in (("stop_reason", str), ("diagnosis", str), ("match_tiers", str)):
+                setattr(r, key, cast(row.get(key) or ""))
+            for key in ("turns", "patient_questions", "tests_ordered", "exams_requested",
+                        "unlisted_tests", "parse_failures"):
+                setattr(r, key, int(float(row.get(key) or 0)))
+            for key in ("test_cost_usd", "api_cost_usd", "final_confidence", "latency_s"):
+                setattr(r, key, float(row.get(key) or 0))
+            r.forced_stop = (row.get("forced_stop") or "").lower() == "true"
+            r.dx_in_results = (row.get("dx_in_results") or "").lower() == "true"
+            r.dx_tokens_in_results = (row.get("dx_tokens_in_results") or "").lower() == "true"
+            r.abstained = (row.get("abstained") or "").lower() == "true"
+            r.match_tiers = dict(
+                part.split("=") for part in (row.get("match_tiers") or "").split(";") if "=" in part
+            )
+            r.match_tiers = {k: int(v) for k, v in r.match_tiers.items()}
+
+            answer = finals.get(r.case_id)
+            if answer is None or r.abstained:
+                # An abstention is never judged (D-028), and a crash left no answer.
+                out.append(r)
+                continue
+            final = FinalAnswer.model_validate(answer)
+            try:
+                verdict = await judge_agent.verdict(
+                    case_id=r.case_id, final=final, view=store.judge_view(r.case_id))
+            except Exception as exc:  # noqa: BLE001
+                r.outcome = "error"
+                r.error = f"judge failed: {type(exc).__name__}"
+                tracer.judge(case_id=r.case_id, event="judge_error",
+                             error_type=type(exc).__name__, error_message=str(exc)[:500])
+                console.print(f"  {r.case_id}  [red]judge failed: {type(exc).__name__}[/red]")
+                out.append(r)
+                continue
+            r.outcome = "scored"
+            r.error = None
+            r.diagnosis = final.diagnosis
+            r.differential = [d.diagnosis for d in final.differential]
+            r.match_type = verdict.match_type
+            r.judge_correct = verdict.correct
+            r.lenient_correct = verdict.lenient_correct
+            r.top_1, r.top_3, r.top_5 = top_k(verdict, 1), top_k(verdict, 3), top_k(verdict, 5)
+            r.in_differential = any(verdict.entry_matches)
+            console.print(f"  {r.case_id}  {verdict.match_type:9s} "
+                          f"correct={verdict.correct} top1={r.top_1}")
+            out.append(r)
+        return out
+
+    results = asyncio.run(main())
+    meta = RunMetadata(
+        run_id=run_id, config_name="single_doctor", model=models.for_role("orchestrator"),
+        judge_model=models.judge.model, provider_pin=",".join(models.provider.pin),
+        fallbacks=models.provider.allow_fallbacks, cache_enabled=False,
+        structured_output_mode=models.structured_output_method,
+        enabled_actions=("ask_patient", "request_exam", "order_test"),
+        max_turns=20, split="dev",
+    )
+    write_report(render(results, meta), run_dir / "report.md")
+    write_results_csv(results, results_path)
+    console.print(f"[green]re-judged: {run_dir / 'report.md'}[/green]")
 
 
 @app.command()

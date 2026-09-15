@@ -27,7 +27,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-class BudgetExceeded(RuntimeError):
+class NonRetryable(Exception):
+    """Signals a condition the repair loop must not swallow.
+
+    The loop deliberately catches broadly — a provider can return HTTP 200 with
+    `choices: null`, and narrow excepts would let one hiccup cost a case. But
+    some exceptions mean "stop", not "try again": a budget breach (retrying
+    spends money that is gone) and a test script running out (retrying turns
+    "the graph looped further than expected" into a passing test).
+    """
+
+
+class BudgetExceeded(NonRetryable, RuntimeError):
     """A spend, request or daily cap was hit. Carries which, for `stop_reason`."""
 
     def __init__(self, kind: str, detail: str) -> None:

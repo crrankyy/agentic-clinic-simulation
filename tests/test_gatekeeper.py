@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentclinic.agents.gatekeeper import UNAVAILABLE, Gatekeeper, normalise
+from agentclinic.agents.gatekeeper import UNAVAILABLE, Gatekeeper, contains, normalise
 from agentclinic.config import load_test_costs
 from agentclinic.data.views import CaseStore
 
@@ -131,3 +131,50 @@ async def test_gatekeeper_cannot_see_anything_but_its_view(store, costs, by_line
     g = gk(store, costs, by_line[2].case_id)
     blob = repr(g.view).casefold()
     assert by_line[2].correct_diagnosis.casefold() not in blob or by_line[2].dx_in_results
+
+
+# --- token containment (added after a live run showed tiers 1-2 never firing) ---
+
+@pytest.mark.parametrize("request_text,expected_tier", [
+    ("complete blood count with differential", "contains"),
+    ("CBC with differential", "synonym"),
+    ("full blood count please", "synonym"),
+])
+async def test_qualified_requests_match_deterministically(store, costs, by_line,
+                                                          request_text, expected_tier):
+    """Real requests carry qualifiers the case keys do not.
+
+    Before containment matching, a live 3-case run resolved 14 of 17 requests
+    through the LLM tier and **zero** through exact or synonym — every qualifier
+    defeated equality matching.
+    """
+    r = await gk(store, costs, by_line[10].case_id).respond(request_text)
+    assert r.key == "Complete_Blood_Count" and r.tier == expected_tier
+
+
+async def test_containment_is_directional(store, costs, cases):
+    """A request for one MRI must not match a different MRI."""
+    case = next((c for c in cases
+                 if any(k.lower().startswith("mri") for k in c.test_results)), None)
+    if case is None:
+        pytest.skip("no MRI key in the dataset")
+    key = next(k for k in case.test_results if k.lower().startswith("mri"))
+    g = gk(store, costs, case.case_id)
+    assert (await g.match(f"{key.replace('_', ' ')} with contrast")).key == key
+    # A key naming a different region must not be satisfied by this request.
+    assert not contains("MRI_Pelvis", f"{key.replace('_',' ')} with contrast") or "Pelvis" in key
+
+
+async def test_eeg_is_distinct_from_ecg(store, costs, cases):
+    """They differ by three letters and are entirely different tests."""
+    case = next((c for c in cases if "Electroencephalogram" in c.test_results), None)
+    if case is None:
+        pytest.skip("no EEG key in the dataset")
+    r = await gk(store, costs, case.case_id).respond("EEG")
+    assert r.key == "Electroencephalogram"
+
+
+async def test_an_unrelated_request_still_does_not_match(store, costs, by_line):
+    """Containment must not become a way to match everything."""
+    r = await gk(store, costs, by_line[10].case_id).respond("positron emission tomography")
+    assert r.unlisted

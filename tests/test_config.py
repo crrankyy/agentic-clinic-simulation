@@ -18,8 +18,17 @@ def test_models_load_and_every_role_has_a_model():
 
 
 def test_provider_is_pinned_for_reproducibility():
+    """Assert the property, not the vendor: the model may change (it has)."""
     cfg = load_models()
-    assert cfg.provider.pin == ["Nvidia"] and cfg.provider.allow_fallbacks is False
+    assert cfg.provider.pin, "a reported run must pin its provider"
+    assert cfg.provider.allow_fallbacks is False
+
+
+def test_structured_output_method_is_declared():
+    """Not every model has native strict schemas; the mechanism must be explicit."""
+    assert load_models().structured_output_method in {
+        "function_calling", "json_mode", "json_schema"
+    }
 
 
 def test_unknown_role_raises_rather_than_defaulting():

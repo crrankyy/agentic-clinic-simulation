@@ -49,6 +49,7 @@ def make_gatekeeper_node(gatekeeper: Gatekeeper, domain: str, kind: str) -> Call
             Event(turn=turn, kind=kind, actor="doctor", text=request),
             Event(turn=turn, kind=kind, actor="gatekeeper", text=reply.text,
                   meta={"tier": reply.tier, "key": str(reply.key),
+                        "request": request[:120],
                         "cost_usd": f"{reply.cost_usd:.2f}"}),
         ]
         if reply.unlisted:

@@ -14,6 +14,7 @@ accounting into the authoritative tracker (D-039), and a trace record.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from dataclasses import dataclass
@@ -24,13 +25,43 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.outputs import LLMResult
 from pydantic import BaseModel, ValidationError
 
-from .guards import RunGuards
+from .guards import NonRetryable, RunGuards
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+#: Signatures of "the provider returned nothing", as they surface through the
+#: OpenAI client. `choices: null` in a 200 response becomes a TypeError deep in
+#: the parsing code, which is indistinguishable from a bug unless matched here.
+_EMPTY_SIGNATURES = (
+    "'NoneType' object is not iterable",
+    "object of type 'NoneType' has no len()",
+)
+
+
+def _looks_empty(exc: BaseException) -> bool:
+    """True for 'the provider gave us nothing', including a hung stream.
+
+    A timeout belongs here rather than with content failures: re-prompting a
+    provider that is not responding is pointless, and the right move is to wait.
+    """
+    if isinstance(exc, (EmptyResponse, asyncio.TimeoutError, TimeoutError)):
+        return True
+    return any(s in str(exc) for s in _EMPTY_SIGNATURES)
 
 
 class MissingCredentials(RuntimeError):
     """`OPENROUTER_API_KEY` is not set."""
+
+
+class EmptyResponse(RuntimeError):
+    """The provider returned no content at all.
+
+    Distinct from invalid content, and the distinction is load-bearing. Observed
+    live on a free endpoint: it answers in ~0.3s with `choices: null` when it is
+    shedding load, while a real generation takes 10-40s. Re-prompting is the
+    wrong response — there is nothing to correct — and doing it immediately just
+    hammers an endpoint that is already refusing. The right response is to wait.
+    """
 
 
 class StructuredOutputFailed(RuntimeError):
@@ -55,6 +86,9 @@ class Usage:
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    #: This model is a reasoning model and spends most of its completion budget
+    #: here — 36 of 39 tokens on a one-word reply. It counts towards max_tokens.
+    reasoning_tokens: int = 0
     cost: float | None = None
 
 
@@ -70,12 +104,16 @@ class UsageRecorder(AsyncCallbackHandler):
         self.last: Usage = Usage()
 
     async def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        # Verified against a live response: OpenRouter's `usage` block arrives
+        # inside `llm_output["token_usage"]`, `cost` included — there is no
+        # separate "usage" key, and for a `:free` model `cost` is present and 0.
         raw = (response.llm_output or {}).get("token_usage") or {}
-        meta = (response.llm_output or {}).get("usage") or {}
-        cost = meta.get("cost", raw.get("cost"))
+        cost = raw.get("cost")
+        details = raw.get("completion_tokens_details") or {}
         self.last = Usage(
             prompt_tokens=int(raw.get("prompt_tokens", 0) or 0),
             completion_tokens=int(raw.get("completion_tokens", 0) or 0),
+            reasoning_tokens=int(details.get("reasoning_tokens", 0) or 0),
             cost=float(cost) if cost is not None else None,
         )
 
@@ -133,14 +171,35 @@ class LLMCaller:
         guards: RunGuards | None = None,
         recorder: UsageRecorder | None = None,
         tracer: Any = None,
+        structured_method: str | None = None,
+        call_timeout: float = 120.0,
     ) -> None:
         self.model = model
+        #: None lets LangChain pick; "function_calling" forces a tool call, which
+        #: is the only schema mechanism some free models offer.
+        self.structured_method = structured_method
+        #: Hard wall-clock ceiling on one call. httpx's timeout is PER-OPERATION:
+        #: a read timeout only fires after that long with *no* data, so a provider
+        #: trickling bytes keeps resetting it and the call never returns. Observed
+        #: live — a run sat on two ESTABLISHED sockets for 65 minutes with the
+        #: event loop pumping an async generator. Only a total deadline bounds it.
+        self.call_timeout = call_timeout
         self.guards = guards
         self.recorder = recorder
         self.tracer = tracer
         #: Per case, because one caller is shared by concurrent encounters and a
         #: single cumulative counter would attribute repairs to the wrong case.
         self.parse_failures_by_case: dict[str, int] = {}
+
+    def _config(self) -> dict[str, Any]:
+        """Callbacks must be passed per invocation.
+
+        `model.with_config(callbacks=[...]).with_structured_output(S)` looks
+        equivalent but is not: `with_structured_output` is proxied to the
+        underlying model, so the bound config is discarded and no usage is ever
+        recorded. That failure is silent — tokens and cost simply read zero.
+        """
+        return {"callbacks": [self.recorder]} if self.recorder is not None else {}
 
     def _record_failures(self, case_id: str, n: int) -> None:
         if n:
@@ -174,6 +233,7 @@ class LLMCaller:
         case_id: str,
         node: str,
         attempts: int = 3,
+        transient_retries: int = 4,
     ) -> BaseModel:
         """Ask for schema-valid output, repairing on failure.
 
@@ -183,34 +243,62 @@ class LLMCaller:
         would bypass `check_stop` and so escape both the turn cap and the spend
         cap.
         """
-        runnable = self.model.with_structured_output(schema)
+        kwargs = {"method": self.structured_method} if self.structured_method else {}
+        runnable = self.model.with_structured_output(schema, **kwargs)
+        config = self._config()
         prompt = messages
         last_error = ""
-        for attempt in range(1, attempts + 1):
+        content_attempts = 0
+        transient = 0
+
+        while content_attempts < attempts:
             await self._before(case_id)
             started = time.monotonic()
             try:
-                result = await runnable.ainvoke(prompt)
+                result = await asyncio.wait_for(
+                    runnable.ainvoke(prompt, config=config), timeout=self.call_timeout
+                )
                 self._after(case_id, node, started)
-                self._record_failures(case_id, attempt - 1)
+                self._record_failures(case_id, content_attempts)
                 return result  # type: ignore[return-value]
-            except (ValidationError, ValueError) as exc:
+            except NonRetryable:
+                raise
+            except Exception as exc:  # noqa: BLE001 — external API boundary
                 self._after(case_id, node, started)
-                last_error = str(exc)[:400]
+                elapsed = time.monotonic() - started
+                last_error = f"{type(exc).__name__}: {exc}"[:400]
+                empty = _looks_empty(exc)
+
+                if empty and transient < transient_retries:
+                    # Wait, do not re-prompt. The endpoint is refusing, not
+                    # misunderstanding. Backoff is what actually recovers it.
+                    transient += 1
+                    delay = min(2 ** transient, 16)
+                    if self.tracer is not None:
+                        self.tracer.node(case_id=case_id, node=node, event="empty_response",
+                                         attempt=transient, backoff_s=delay,
+                                         elapsed_s=round(elapsed, 2))
+                    await asyncio.sleep(delay)
+                    continue
+
+                content_attempts += 1
                 if self.tracer is not None:
                     self.tracer.node(case_id=case_id, node=node, event="parse_failure",
-                                     attempt=attempt, error=last_error[:200])
+                                     attempt=content_attempts, error=last_error[:200])
                 prompt = (
                     f"{messages}\n\n---\nYour previous reply did not match the required "
                     f"schema. Error:\n{last_error}\nReply again, valid this time."
                 )
+
         self._record_failures(case_id, attempts)
         raise StructuredOutputFailed(schema.__name__, attempts, last_error)
 
     async def text(self, messages: Any, *, case_id: str, node: str) -> str:
         await self._before(case_id)
         started = time.monotonic()
-        result = await self.model.ainvoke(messages)
+        result = await asyncio.wait_for(
+            self.model.ainvoke(messages, config=self._config()), timeout=self.call_timeout
+        )
         self._after(case_id, node, started)
         content = getattr(result, "content", result)
         return content if isinstance(content, str) else str(content)

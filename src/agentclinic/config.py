@@ -40,6 +40,10 @@ class ModelConfig:
     provider: ProviderConfig
     roles: dict[str, str]
     judge: JudgeConfig
+    #: How schemas are enforced. Not every model supports native strict schemas;
+    #: some only offer tool calling, which is a perfectly good mechanism when the
+    #: model also supports tool_choice so the call can be forced.
+    structured_output_method: str = "function_calling"
 
     def for_role(self, role: str) -> str:
         try:
@@ -86,6 +90,8 @@ def load_models(config_dir: Path | None = None) -> ModelConfig:
         roles=dict(raw["roles"]),
         judge=JudgeConfig(sdk=j["sdk"], model=j["model"],
                           max_calls_per_run=int(j["max_calls_per_run"])),
+        structured_output_method=(raw.get("structured_output") or {}).get(
+            "method", "function_calling"),
     )
 
 

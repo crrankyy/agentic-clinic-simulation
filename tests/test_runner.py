@@ -179,3 +179,36 @@ async def test_one_exploding_case_does_not_cancel_its_siblings(cases):
     by_id = {r.case_id: r for r in results}
     assert by_id["medqa-0002"].outcome == "crash"
     assert by_id["medqa-0009"].outcome == "scored"
+
+
+async def test_a_hanging_call_is_bounded_by_the_case_deadline(cases):
+    """The bug this guards: httpx timeouts are PER-OPERATION, not total.
+
+    A provider trickling bytes resets the read timer forever. Observed live —
+    a run held two ESTABLISHED sockets for 65 minutes with no progress, because
+    the turn cap bounds turns and nothing bounded wall-clock.
+    """
+    import asyncio
+
+    case = next(c for c in cases if c.case_id == "medqa-0010")
+
+    class Hanging:
+        async def ainvoke(self, *a, **kw):
+            await asyncio.sleep(3600)
+
+    result = await run_case(case=case, store=CaseStore(cases),
+                            build_graph=lambda _c: Hanging(), judge=None,
+                            recursion_limit=RECURSION, case_deadline_s=0.2)
+    assert result.outcome == "crash"
+    assert "TimeoutError" in (result.error or "")
+
+
+async def test_a_call_timeout_is_treated_as_transient_not_as_bad_content(cases):
+    """Re-prompting a provider that is not answering is pointless; waiting is not."""
+    import asyncio
+
+    from agentclinic.llm.openrouter import _looks_empty
+
+    assert _looks_empty(asyncio.TimeoutError())
+    assert _looks_empty(TimeoutError())
+    assert not _looks_empty(ValueError("field required"))

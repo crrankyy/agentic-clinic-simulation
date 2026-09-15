@@ -27,6 +27,16 @@ tests:
   arterial blood gas: [abg, blood gas, gas]
   inflammatory markers: [crp, esr, c reactive protein]
   electrocardiogram: [ecg, ekg, 12 lead, cardiac tracing]
+  # EEG is a different test from ECG and was missing entirely -- a live run
+  # requested "EEG" against a case filed under Electroencephalogram and fell
+  # through to the LLM tier.
+  electroencephalogram: [eeg, brain wave test, electro encephalogram]
+  mammography: [mammogram, breast imaging, diagnostic mammogram]
+  bone marrow aspirate: [bone marrow, marrow aspirate, bone marrow biopsy]
+  nerve conduction study: [ncs, nerve conduction velocity]
+  serum creatinine: [creatinine, renal function, kidney function]
+  c reactive protein: [crp]
+  erythrocyte sedimentation rate: [esr, sed rate]
   echocardiogram: [echo, cardiac echo, transthoracic echocardiogram, tte]
   chest x-ray: [cxr, chest radiograph, chest film, chest xray]
   abdominal x-ray: [axr, abdominal film, abdominal radiograph]
@@ -34,7 +44,6 @@ tests:
   mri: [magnetic resonance imaging, mr scan]
   ultrasound: [us, sonogram, sonography, uss]
   skin biopsy: [punch biopsy, dermatologic biopsy]
-  bone marrow aspirate: [bone marrow, marrow aspirate, bone marrow biopsy]
   lumbar puncture: [lp, spinal tap, csf, csf analysis]
   electromyography: [emg, nerve conduction, nerve conduction study]
   pulmonary function tests: [pft, pfts, spirometry, lung function]

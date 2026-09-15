@@ -23,8 +23,10 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from pydantic import BaseModel
 
+from .guards import NonRetryable
 
-class ScriptExhausted(RuntimeError):
+
+class ScriptExhausted(NonRetryable, RuntimeError):
     """The graph asked for more responses than the test scripted.
 
     Raised rather than returning a default, because a silent default turns "the

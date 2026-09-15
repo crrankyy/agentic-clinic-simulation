@@ -114,3 +114,84 @@ The **live spike** still needs `OPENROUTER_API_KEY`, and the judge needs
 `ant auth login`. Until then: strict structured output on the free model is
 unverified, `usage.cost` behaviour for `:free` models is unknown, and no live
 3-case run has happened. Everything above is offline verification.
+
+---
+
+## 7. Live findings (added after the first real API runs)
+
+The offline suite was green throughout everything below. None of these would
+have been found without spending real requests against a real provider.
+
+### 7.1 The spike answered both Phase 1 questions, then the model failed anyway
+
+Strict structured output worked on `nemotron:free` — valid enum members, zero
+repairs, four live calls. `usage.cost` populates and reads `0` for a `:free`
+model, with real token counts alongside.
+
+Then the same model failed **0/2** on the *nested* `HypothesisUpdate`. The flat
+schema had flattered it. A full 6-turn encounter needed **17 empty-response
+backoffs across 37 calls** — 46% of calls refused — and crashed outright before
+backoff existed. Testing the easy schema and declaring victory would have been a
+mistake; the nested one is what the design actually uses.
+
+### 7.2 `UsageRecorder` silently recorded nothing
+
+The first spike reported `0` tokens and `cost=None`. The cause was not
+OpenRouter: a raw `httpx` call showed `prompt_tokens: 23, completion_tokens: 16,
+cost: 0`. The bug was ours —
+`model.with_config(callbacks=[rec]).with_structured_output(S)` looks equivalent
+to attaching callbacks, but `with_structured_output` is proxied to the
+*underlying* model and the bound config is discarded. Callbacks are now passed
+per invocation. The failure was silent: tokens and cost simply read zero.
+
+### 7.3 A provider can return HTTP 200 with `choices: null`
+
+Seen live. It surfaces through the OpenAI client as
+`TypeError: 'NoneType' object is not iterable`, which is indistinguishable from
+a bug unless matched deliberately. The repair loop caught only
+`ValidationError`/`ValueError`, so one provider hiccup killed a case and removed
+it from the accuracy denominator.
+
+Two fixes: the loop now catches broadly at that boundary (with a `NonRetryable`
+marker so budget breaches and exhausted test scripts still propagate), and —
+more importantly — **empty responses are distinguished from invalid content**.
+An empty response backs off and resends unchanged; only invalid content is
+re-prompted. The timing made the distinction obvious: failures returned in
+**0.3s** while real generations took 10–40s. Re-prompting a refusing endpoint
+three times inside one second is the worst available response.
+
+### 7.4 The turn cap does not bound wall-clock time — a 65-minute hang
+
+A 3-case run made no progress for 65 minutes with the process alive. `lsof`
+showed two ESTABLISHED sockets to OpenRouter; a `sample` stack dump showed the
+event loop pumping an async generator. The provider was trickling bytes.
+
+`httpx` timeouts are **per-operation**: a read timeout fires only after that long
+with *no* data, so a trickle resets it forever. Turns, spend and requests were
+all bounded; wall-clock was not — and on a free model the spend cap is inert, so
+there was no backstop at all. See **D-044**.
+
+Worth recording how it was diagnosed, because the first two guesses were wrong.
+"Retry storm" was plausible (`timeout × (max_retries+1)` = 480s) and wrong. The
+process list initially matched a shell wrapper with 8 KB RSS, suggesting the
+process had died. Only the socket state plus the stack sample identified it.
+
+### 7.5 Model switched to `inclusionai/ling-3.0-flash-vl:free` (D-043)
+
+2/2 on the nested schema at ~10s, 4/4 on the flat one at ~4s, zero backoffs
+across a full encounter, and it finalized *voluntarily* at turn 5 rather than
+exhausting the cap. Its answer on `medqa-0002` — "Progressive Multifocal
+Leukoencephalopathy (PML) due to natalizumab therapy" — matches ground truth,
+though that case is one of the 29 where the diagnosis is embedded in the test
+results, which is exactly why `dx_in_results` exists.
+
+The mechanism changed with it: this model has `tools` and `tool_choice` but no
+native strict schemas, so output is constrained by a **forced tool call**. That
+is the second rung of the Q-15 ladder, now primary, and it is recorded per run.
+
+### 7.6 Judging is now separable from running
+
+Encounters cost ~180 OpenRouter requests; judging costs 3 Anthropic calls. They
+failed together because the final answers were not persisted. `finals.json` now
+holds them and `agentclinic judge <run_id>` re-judges a completed run, so a
+missing credential costs three calls to recover from rather than a whole re-run.

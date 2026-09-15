@@ -34,11 +34,35 @@ import yaml
 from ..config import CONFIG_DIR, TestCosts
 from ..data.views import GatekeeperView
 
-MatchTier = Literal["exact", "synonym", "leaf", "llm_disambiguated", "llm", "unmatched"]
+MatchTier = Literal["exact", "contains", "synonym", "leaf",
+                    "llm_disambiguated", "llm", "unmatched"]
 
 Domain = Literal["tests", "exams"]
 
 UNAVAILABLE = "Not available for this patient."
+
+
+def tokens(text: str) -> frozenset[str]:
+    """Normalised word set, for containment matching."""
+    return frozenset(normalise(text).split())
+
+
+def contains(key: str, request: str) -> bool:
+    """True when every token of `key` appears in `request`.
+
+    Deterministic and thresholdless, which is why this is not the fuzzy tier
+    D-034 removed. It exists because real requests carry qualifiers the case
+    keys do not: a doctor asks for "MRI of the brain with contrast" or "CBC with
+    differential", while the case files them under `MRI_Brain` and
+    `Complete_Blood_Count`. Requiring equality meant tiers 1 and 2 never fired
+    once across a whole run — every match fell through to the LLM tier.
+
+    Containment is directional on purpose. "MRI spine" does not match a request
+    for "MRI of the brain", because {mri, spine} is not a subset of
+    {mri, of, the, brain}.
+    """
+    k = tokens(key)
+    return bool(k) and k <= tokens(request)
 
 
 def normalise(text: str) -> str:
@@ -148,11 +172,31 @@ class Gatekeeper:
             key = top[wanted]
             return MatchResult(tier="exact", key=key, payload=tree[key])
 
-        # Tier 2 — curated synonyms, canonicalised then matched exactly.
-        canonical = self.synonyms.get(domain, {}).get(wanted)
-        if canonical and canonical in top:
-            key = top[canonical]
-            return MatchResult(tier="synonym", key=key, payload=tree[key])
+        # Tier 1b — the key's tokens are all present in the request. Longest key
+        # first, so "MRI brain" beats "MRI" when both would match.
+        contained = sorted((k for k in top if contains(k, wanted)),
+                           key=lambda k: (-len(tokens(k)), k))
+        if len(contained) == 1 or (contained and
+                                   len(tokens(contained[0])) > len(tokens(contained[1]))):
+            key = top[contained[0]]
+            return MatchResult(tier="contains", key=key, payload=tree[key],
+                               candidates=tuple(top[c] for c in contained))
+
+        # Tier 2 — curated synonyms. An alias may be a fragment of the request
+        # ("CBC with differential"), so aliases are matched by containment too.
+        table = self.synonyms.get(domain, {})
+        canonical = table.get(wanted)
+        if canonical is None:
+            hits = {c for alias, c in table.items() if contains(alias, wanted)}
+            canonical = hits.pop() if len(hits) == 1 else None
+        if canonical:
+            if canonical in top:
+                key = top[canonical]
+                return MatchResult(tier="synonym", key=key, payload=tree[key])
+            by_canonical = [k for k in top if contains(k, canonical) or contains(canonical, k)]
+            if len(by_canonical) == 1:
+                key = top[by_canonical[0]]
+                return MatchResult(tier="synonym", key=key, payload=tree[key])
 
         # Granularity — a request naming a leaf matches its parent.
         parents = self._parents_with_leaf(domain, wanted)

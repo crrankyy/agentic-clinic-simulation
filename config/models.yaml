@@ -9,20 +9,27 @@
 
 provider:
   base_url: https://openrouter.ai/api/v1
-  # D-030: the model has exactly one endpoint, so pinning costs nothing and
-  # guarantees a reported run cannot silently change provider mid-way.
-  pin: ["Nvidia"]
+  # D-043: one endpoint (Novita), so pinning costs nothing and guarantees a
+  # reported run cannot silently change provider mid-way.
+  pin: ["Novita"]
   allow_fallbacks: false
   attribution_title: agent-clinic   # Q-06: X-Title only, no HTTP-Referer
 
+# D-043: this model has tools + tool_choice but NO native structured outputs and
+# no response_format, so schemas are enforced by a FORCED TOOL CALL. Measured
+# against the real nested HypothesisUpdate: 2/2 at ~10s, full 8-item
+# differential. Options: function_calling | json_mode | json_schema.
+structured_output:
+  method: function_calling
+
 roles:
-  patient:       nvidia/nemotron-3-super-120b-a12b:free
-  gatekeeper:    nvidia/nemotron-3-super-120b-a12b:free
-  hypothesis:    nvidia/nemotron-3-super-120b-a12b:free
-  orchestrator:  nvidia/nemotron-3-super-120b-a12b:free
-  challenger:    nvidia/nemotron-3-super-120b-a12b:free
-  cost_steward:  nvidia/nemotron-3-super-120b-a12b:free
-  evidence:      nvidia/nemotron-3-super-120b-a12b:free
+  patient:       inclusionai/ling-3.0-flash-vl:free
+  gatekeeper:    inclusionai/ling-3.0-flash-vl:free
+  hypothesis:    inclusionai/ling-3.0-flash-vl:free
+  orchestrator:  inclusionai/ling-3.0-flash-vl:free
+  challenger:    inclusionai/ling-3.0-flash-vl:free
+  cost_steward:  inclusionai/ling-3.0-flash-vl:free
+  evidence:      inclusionai/ling-3.0-flash-vl:free
 
 # D-021: the judge runs on the Anthropic SDK, NOT OpenRouter. This is an
 # explicit, recorded override of brief §0.2. Two reasons: judge calls then do
