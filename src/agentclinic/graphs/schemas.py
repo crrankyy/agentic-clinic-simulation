@@ -103,10 +103,26 @@ class JudgeVerdict(BaseModel):
 
 
 class ChallengerOpinion(BaseModel):
-    """Advisory only (D-025) — deliberately no `should_reopen`."""
+    """Advisory only (D-025) — deliberately no `should_reopen`.
+
+    `most_dangerous_unexcluded` and `dangerous_alternative_likelihood` are two
+    fields rather than one sentence because the panel's `medqa-0012` failure was
+    exactly their conflation: the challenger named the most *dangerous*
+    alternative, and the orchestrator promoted it to most *likely*, demoting the
+    correct answer from rank 1 to rank 2 with the rationale "ranked highest
+    because it is the most dangerous diagnosis if missed" (D-051). Prose cannot
+    be relied on to keep severity and probability apart, so the schema does it:
+    naming a danger now forces a separate, explicit likelihood judgement.
+    """
 
     argument_against_leader: str
     most_dangerous_unexcluded: str
+    dangerous_alternative_likelihood: Literal["more_likely", "comparable", "less_likely"] = Field(
+        description="How likely the dangerous alternative is COMPARED TO the "
+                    "current leading diagnosis. This is a judgement about "
+                    "probability, not about severity: a diagnosis can be far "
+                    "more dangerous and still be far less likely.",
+    )
 
 
 class CostStewardOpinion(BaseModel):

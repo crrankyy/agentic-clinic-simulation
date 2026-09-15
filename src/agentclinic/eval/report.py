@@ -151,17 +151,40 @@ def render(
     tiers: Counter[str] = Counter()
     for r in results:
         tiers.update(r.match_tiers)
+    # A rebuilt run (D-050) never had its encounter events persisted, so most of
+    # this block is unmeasured. Printing the dataclass defaults would present
+    # "not recorded" as "observed zero" — the same failure the `n/a` handling
+    # elsewhere in this report exists to avoid.
+    rebuilt = [r for r in results if not r.behaviour_recovered]
+    if rebuilt:
+        lines += [
+            f"> ⚠️ **{len(rebuilt)} of {len(results)} cases were reconstructed "
+            "from `finals.json` and the traces (D-050), not measured live.** "
+            "Encounter events are not persisted, so for those cases `turns` and "
+            "`tests` are **lower bounds** — the gatekeeper only calls the model "
+            "when its cheap match tiers miss — and exams, unlisted requests, "
+            "match tiers, red flags and simulated cost were not recoverable at "
+            "all. They are shown as `n/a`, not as zero.",
+            "",
+        ]
+    partial = bool(rebuilt)
+    na = "n/a (not recorded)"
     lines += [
-        f"- turns: {sum(r.turns for r in results)} total, "
-        f"{sum(r.turns for r in results) / max(1, len(results)):.1f} mean",
-        f"- forced stops: {sum(r.forced_stop for r in results)}/{len(results)}",
+        f"- turns: {sum(r.turns for r in results)}"
+        + (" (lower bound)" if partial else "")
+        + f" total, {sum(r.turns for r in results) / max(1, len(results)):.1f} mean",
+        f"- forced stops: " + (na if partial else
+                               f"{sum(r.forced_stop for r in results)}/{len(results)}"),
         f"- patient questions: {sum(r.patient_questions for r in results)}; "
-        f"tests: {sum(r.tests_ordered for r in results)}; "
-        f"exams: {sum(r.exams_requested for r in results)}",
-        f"- unlisted requests: {sum(r.unlisted_tests for r in results)}",
-        f"- gatekeeper match tiers: {dict(tiers) or '(none)'}",
-        f"- simulated test cost: ${sum(r.test_cost_usd for r in results):.2f} "
-        "(illustrative prices, not a fee schedule)",
+        f"tests: {sum(r.tests_ordered for r in results)}"
+        + (" (lower bound)" if partial else "")
+        + "; exams: " + (na if partial else f"{sum(r.exams_requested for r in results)}"),
+        "- unlisted requests: " + (na if partial else
+                                   f"{sum(r.unlisted_tests for r in results)}"),
+        "- gatekeeper match tiers: " + (na if partial else f"{dict(tiers) or '(none)'}"),
+        "- simulated test cost: " + (na if partial else
+                                     f"${sum(r.test_cost_usd for r in results):.2f} "
+                                     "(illustrative prices, not a fee schedule)"),
         f"- parse failures: {sum(r.parse_failures for r in results)}",
         "",
     ]

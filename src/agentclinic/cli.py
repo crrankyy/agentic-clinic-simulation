@@ -435,6 +435,10 @@ def judge(
             r.dx_in_results = as_bool(row.get("dx_in_results"))
             r.dx_tokens_in_results = as_bool(row.get("dx_tokens_in_results"))
             r.abstained = as_bool(row.get("abstained"))
+            # Absent from CSVs written before D-051; those runs were measured
+            # live, so a missing column means True, not False.
+            if "behaviour_recovered" in row:
+                r.behaviour_recovered = as_bool(row["behaviour_recovered"])
             tiers = row.get("match_tiers") or ""
             if isinstance(tiers, dict):
                 r.match_tiers = {k: int(v) for k, v in tiers.items()}

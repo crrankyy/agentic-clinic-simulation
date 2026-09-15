@@ -319,3 +319,34 @@ async def test_an_advisory_node_that_cannot_produce_output_does_not_kill_the_cas
     out = await run(graph, store)
     assert out["final"] is not None, "an advisory failure must not lose the case"
     assert out["parse_failures"] >= 3
+
+
+async def test_a_dangerous_alternative_reaches_the_orchestrator_with_its_likelihood(cases):
+    """D-051: the `medqa-0012` regression test.
+
+    The panel lost that case by promoting the challenger's most-*dangerous*
+    alternative to most-*likely* — "ranked highest because it is the most
+    dangerous diagnosis if missed". The schema now forces the challenger to
+    judge probability separately, and this asserts the orchestrator is actually
+    shown that judgement rather than a bare danger.
+    """
+    danger = {"argument_against_leader": "The imaging is not specific.",
+              "most_dangerous_unexcluded": "UNIQUE_DANGER_MARKER_9",
+              "dangerous_alternative_likelihood": "less_likely"}
+    script = [
+        HYP, decide("order_test", "CBC"), COST_OK,
+        HYP, decide("finalize"), danger,
+        HYP, decide("finalize"), FINAL,
+    ]
+    graph, model, store = build_panel(cases, script)
+    await run(graph, store)
+
+    prompts = [p for p in model.rendered_prompts if "Choose exactly one action" in p]
+    shown = [p for p in prompts if "UNIQUE_DANGER_MARKER_9" in p]
+    assert shown, "the dangerous alternative never reached the orchestrator"
+    p = shown[0]
+    assert "LESS likely than your leader" in p, (
+        "the danger was shown without its likelihood — exactly the conflation "
+        "that lost medqa-0012"
+    )
+    assert "Severity and probability are separate." in p

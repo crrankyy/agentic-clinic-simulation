@@ -121,6 +121,39 @@ def test_report_never_prints_an_accuracy_without_a_denominator(cases):
     assert "validates the harness; it does not measure anything" in text
 
 
+def test_a_rebuilt_run_does_not_report_unrecorded_telemetry_as_zero():
+    """D-050's counterpart. The rebuild cannot recover encounter events.
+
+    Printing the dataclass defaults would turn "never recorded" into "observed
+    zero" — the panel run's report claimed `exams: 0`, `unlisted requests: 0`
+    and `match tiers: (none)` for 25 tests it had no event records for.
+    """
+    from agentclinic.eval.runner import CaseResult
+
+    meta = RunMetadata(run_id="r", config_name="panel", model="m",
+                       judge_model="j", provider_pin="Novita", fallbacks=False,
+                       cache_enabled=False, structured_output_mode="function_calling",
+                       enabled_actions=("ask_patient", "order_test"), max_turns=20,
+                       split="dev")
+    rebuilt = CaseResult(case_id="c1", outcome="scored", judge_correct=True,
+                         turns=18, tests_ordered=9, behaviour_recovered=False)
+    text = render([rebuilt], meta)
+    assert "- gatekeeper match tiers: n/a (not recorded)" in text
+    assert "(none)" not in text
+    assert "exams: n/a (not recorded)" in text
+    assert "- unlisted requests: n/a (not recorded)" in text
+    assert "lower bound" in text
+    assert "reconstructed from `finals.json`" in text
+
+    # A normally-measured run keeps reporting real numbers.
+    live = CaseResult(case_id="c1", outcome="scored", judge_correct=True,
+                      turns=18, tests_ordered=9, exams_requested=0)
+    live_text = render([live], meta)
+    assert "n/a (not recorded)" not in live_text
+    assert "exams: 0" in live_text
+    assert "lower bound" not in live_text
+
+
 async def test_a_judge_failure_is_contained_to_one_case(cases):
     """A judge outage must not destroy a run whose encounters are already paid for."""
     case = next(c for c in cases if c.case_id == "medqa-0010")

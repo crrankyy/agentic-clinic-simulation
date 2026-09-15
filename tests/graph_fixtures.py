@@ -55,7 +55,8 @@ def build(cases, script, *, case_id="medqa-0010", max_turns=10, guards=None, pat
 
 
 CHALLENGE = {"argument_against_leader": "The imaging is not specific.",
-             "most_dangerous_unexcluded": "Cerebral abscess"}
+             "most_dangerous_unexcluded": "Cerebral abscess",
+             "dangerous_alternative_likelihood": "less_likely"}
 COST_OK = {"objection": None, "would_change_management": True}
 COST_OBJECT = {"objection": "Unlikely to change management at this stage.",
                "would_change_management": False}

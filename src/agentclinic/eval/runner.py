@@ -62,6 +62,10 @@ class CaseResult:
     dx_in_results: bool = False
     dx_tokens_in_results: bool = False
     error: str | None = None
+    #: False when this row was reconstructed by `rebuild_results` rather than
+    #: measured live. The behaviour counters are then partly approximate and
+    #: partly absent, and the report must not present them as measurements.
+    behaviour_recovered: bool = True
     #: The ordered differential, kept so the judge can be re-run later without
     #: re-running the encounter. `results.csv` gets the names; `finals.json`
     #: keeps the whole answer.
@@ -281,8 +285,21 @@ def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResu
     expensive half (hundreds of requests); the bookkeeping is derivable, so
     losing the CSV should not mean re-running them.
 
-    Counts come from the trace's own event records, so they are the same numbers
-    the live path would have produced.
+    The encounter events are **not** persisted — they live only in graph state,
+    and `results.csv` was their only sink. So the behaviour counters here are
+    reconstructed from the per-node LLM calls and are strictly weaker than the
+    live ones:
+
+    * `patient_questions` is exact (`ask_patient` always calls the model).
+    * `turns` and `tests_ordered` are **lower bounds**: the gatekeeper calls the
+      model only when the exact/contains/synonym/leaf tiers all miss (D-045), so
+      a cheaply-resolved test leaves no record here.
+    * `exams_requested`, `unlisted_tests`, `match_tiers`, `red_flag_turn`,
+      `patient_unknown_rate`, `test_cost_usd`, `stop_reason` and `forced_stop`
+      are **not recoverable at all** and stay at their defaults.
+
+    `behaviour_recovered=False` marks the row so the report says this rather
+    than printing the defaults as though they were measured zeros.
     """
     import json
 
@@ -315,5 +332,6 @@ def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResu
             result.tests_ordered = sum(1 for r in calls if r.get("node") == "gatekeeper")
             result.turns = sum(1 for r in calls if r.get("node") in
                                {"ask_patient", "gatekeeper", "search_literature"})
+        result.behaviour_recovered = False
         out.append(result)
     return sorted(out, key=lambda r: r.case_id)

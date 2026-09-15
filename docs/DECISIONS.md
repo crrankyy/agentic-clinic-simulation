@@ -962,3 +962,33 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
   cost a re-run. The counts come from the traces' own records, so they are the
   same numbers the live path would have produced.
 - **Note:** this is the second time `finals.json` (D-047) has paid for itself.
+
+## D-051 — The challenger judges severity and probability as separate fields
+
+- **Date:** 2026-09-16
+- **Question:** The panel's only loss in the live 3-case run (`medqa-0012`) was
+  a rank inversion, not a missing answer: the correct diagnosis sat at rank 2
+  (p=0.30) while the orchestrator ranked "Metabolic/mitochondrial disorder"
+  first with the stated rationale *"ranked highest because it is the most
+  dangerous diagnosis if missed"* — the challenger prompt's own language
+  (*"Name the most dangerous alternative that has not been excluded"*). Should
+  the challenger keep emitting a bare danger?
+- **Options:** (a) leave it — n=3 proves nothing; (b) soften the prompt wording
+  only; (c) split the judgement into two schema fields and render both.
+- **Decision:** (c). `ChallengerOpinion` gains
+  `dangerous_alternative_likelihood: Literal["more_likely","comparable",
+  "less_likely"]`, the prompt asks for the two judgements independently, and the
+  orchestrator is shown the likelihood in words next to the danger, with an
+  explicit instruction that severity does not license promotion.
+- **Reason:** this project's governing principle is that a property worth
+  relying on is enforced by state design, not by prompt wording (brief §5). The
+  severity/probability distinction is exactly such a property: (b) leaves the
+  model free to collapse the two back into one sentence, while a required enum
+  field makes the probability claim unavoidable and separately inspectable.
+  `less_likely` is now sayable, which under the old schema it was not.
+- **Scope:** this is a design correction, **not** a result. n=3 cannot show the
+  change helps; whether it does is a Phase 6 question, measured on a real split.
+  The claim recorded here is only that the old schema could not express the
+  distinction its own prompt depended on.
+- **Test:** `test_a_dangerous_alternative_reaches_the_orchestrator_with_its_likelihood`,
+  verified to fail against the pre-fix rendering.

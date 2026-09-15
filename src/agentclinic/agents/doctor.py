@@ -122,6 +122,15 @@ def make_hypothesis_node(caller: Any, case_id: str, config_dir: Path | None = No
     return budget_guarded(hypothesis, channel="encounter_log")
 
 
+#: Rendered in words rather than passed through as the raw enum value, so the
+#: orchestrator reads a probability claim instead of a token it might skim past.
+_LIKELIHOOD = {
+    "more_likely": "MORE likely than your leader",
+    "comparable": "about as likely as your leader",
+    "less_likely": "LESS likely than your leader",
+}
+
+
 def make_orchestrator_node(
     caller: Any, case_id: str, decision_model: type, max_turns: int,
     config_dir: Path | None = None,
@@ -136,7 +145,14 @@ def make_orchestrator_node(
             opinions.append(
                 f"## A colleague challenges your leading diagnosis\n\n"
                 f"{op.argument_against_leader}\n\n"
-                f"Most dangerous alternative not excluded: {op.most_dangerous_unexcluded}"
+                f"Most dangerous alternative not excluded: "
+                f"{op.most_dangerous_unexcluded}\n"
+                f"Their view of how *likely* that alternative is, compared with "
+                f"your current leader: **{_LIKELIHOOD[op.dangerous_alternative_likelihood]}**\n\n"
+                f"Severity and probability are separate. Raise this alternative "
+                f"in your differential only if the evidence makes it more likely "
+                f"— not because it would be worse to miss. If it is dangerous but "
+                f"less likely, the response is to exclude it, not to rank it first."
             )
         if state.get("cost_objection") and state["cost_objection"].objection:
             opinions.append(f"## Cost review\n\n{state['cost_objection'].objection}")
@@ -310,7 +326,8 @@ def make_challenger_node(
             channel: [Event(turn=turn, kind="challenge", actor="doctor",
                             meta={"when": when},
                             text=f"{opinion.argument_against_leader} "
-                                 f"Most dangerous unexcluded: {opinion.most_dangerous_unexcluded}")],
+                                 f"Most dangerous unexcluded: {opinion.most_dangerous_unexcluded} "
+                                 f"({_LIKELIHOOD[opinion.dangerous_alternative_likelihood]})")],
         }
 
     return advisory(budget_guarded(challenger, channel=channel),

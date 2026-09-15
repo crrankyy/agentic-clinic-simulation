@@ -408,6 +408,8 @@ class PatientReply(BaseModel):
 class ChallengerOpinion(BaseModel):                  # advisory (D-025)
     argument_against_leader: str
     most_dangerous_unexcluded: str
+    dangerous_alternative_likelihood: Literal[       # D-051: severity is not
+        "more_likely", "comparable", "less_likely"]  # probability
 
 class CostStewardOpinion(BaseModel):                 # advisory (D-025)
     objection: str | None
