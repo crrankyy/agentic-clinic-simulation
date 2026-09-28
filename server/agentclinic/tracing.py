@@ -76,9 +76,6 @@ class Tracer:
             "text": event.text, "meta": dict(event.meta),
         })
 
-    def tool_call(self, *, case_id: str, node: str, tool: str, **fields: Any) -> None:
-        self._write(self._case_path(case_id), {"kind": "tool_call", "node": node, "tool": tool, **fields})
-
     def error(self, *, case_id: str, node: str, exc: BaseException) -> None:
         """Type and message only — never a traceback (PLAN.md §3.3 item 8)."""
         self._write(self._case_path(case_id), {

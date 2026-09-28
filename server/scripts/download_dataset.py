@@ -9,7 +9,8 @@ and is testable offline with a mocked transport (see
 
 Decisions this file implements (see ``docs/DECISIONS.md``):
 
-* **D-002** — only the two MedQA files are fetched; no NEJM.
+* **D-002** — only MedQA is fetched; no NEJM. Only the extended file, since
+  D-064: the 107-case file was downloaded and never loaded.
 * **D-003** — the source is pinned to a commit SHA, never ``main``, so the data
   cannot change under a saved evaluation baseline.
 * **D-004** — if a file exists and its hash differs from the recorded one, stop.
@@ -58,10 +59,9 @@ class DatasetFile:
     expected_cases: int
 
 
-#: D-002: the two MedQA files only.
+#: D-002, narrowed by D-064: the file the pipeline loads.
 DATASET_FILES: tuple[DatasetFile, ...] = (
     DatasetFile("agentclinic_medqa_extended.jsonl", 214),
-    DatasetFile("agentclinic_medqa.jsonl", 107),
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -96,12 +96,9 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def sha256_path(path: Path) -> str:
-    """Return the hex SHA-256 of a file, read in chunks."""
-    digest = hashlib.sha256()
+    """Return the hex SHA-256 of a file."""
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def count_nonblank_lines(data: bytes) -> int:

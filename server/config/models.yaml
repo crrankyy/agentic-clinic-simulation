@@ -1,4 +1,4 @@
-# Model assignment per role. Model IDs live here, never in code (brief §4).
+# The model. Model IDs live here, never in code (brief §4).
 #
 # D-020: every OpenRouter role uses ONE free model. It is the largest free model
 # advertising both tool calling and strict structured outputs, which Q-11, Q-15
@@ -8,7 +8,6 @@
 # Free-tier limits (D-023): 20 requests/minute, 1000/day. See config/budgets.yaml.
 
 provider:
-  base_url: https://openrouter.ai/api/v1
   # D-061: deepseek/deepseek-v4.1-flash, pinned to Together. Chosen by
   # `cli probe` on 2026-09-27 against the real nested schemas (the D-043
   # procedure), forced tool calls:
@@ -23,7 +22,6 @@ provider:
   # timeout. DeepInfra is the cheaper fallback if cost matters more.
   pin: ["Together"]
   allow_fallbacks: false
-  require_parameters: false
   attribution_title: agent-clinic   # Q-06: X-Title only, no HTTP-Referer
 
 # Forced tool calls, as for every run so far, so the mechanism stays comparable.
@@ -34,21 +32,14 @@ structured_output:
 
 # D-020's rule stands in its surviving half: ONE model for every role, so the
 # panel-vs-single comparison has no role/model confound. The ":free" half is
-# superseded by D-061 at the user's direction -- this model is paid.
-roles:
-  patient:       deepseek/deepseek-v4.1-flash
-  gatekeeper:    deepseek/deepseek-v4.1-flash
-  hypothesis:    deepseek/deepseek-v4.1-flash
-  orchestrator:  deepseek/deepseek-v4.1-flash
-  finalize:      deepseek/deepseek-v4.1-flash
-  challenger:    deepseek/deepseek-v4.1-flash
-  cost_steward:  deepseek/deepseek-v4.1-flash
-  evidence:      deepseek/deepseek-v4.1-flash
+# superseded by D-061 at the user's direction -- this model is paid. One key,
+# not a per-role map, so the rule cannot be broken by editing one line (D-064).
+model: deepseek/deepseek-v4.1-flash
 
 # D-061: bounded output and bounded thinking, per role. Unbounded, hypothesis
 # calls reached 32,768 completion tokens three times and 38,987 once (488 s).
 # max_tokens includes reasoning. A reply cut off at the limit is repaired with
-# "be more concise", not silently truncated.
+# "be more concise", not silently truncated. A role not listed uses `default`.
 role_settings:
   default:      {max_tokens: 4000, reasoning: {effort: medium, exclude: true}}
   patient:      {max_tokens: 1500, reasoning: {effort: low, exclude: true}}
@@ -62,7 +53,6 @@ role_settings:
 # not consume the OpenRouter daily allowance, and the judge must never be weaker
 # than the agents it grades.
 judge:
-  sdk: anthropic
   model: claude-opus-5
   max_calls_per_run: 200          # D-037
   # D-046: "subscription" refuses to run if ANTHROPIC_API_KEY or

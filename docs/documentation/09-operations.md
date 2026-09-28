@@ -66,20 +66,16 @@ Model IDs live in `server/config/models.yaml`, **never in code**.
 provider:
   pin: ["Together"]                 # chosen by `cli probe` (D-061)
   allow_fallbacks: false
-  require_parameters: false
 structured_output:
   method: function_calling
-roles:
-  orchestrator: deepseek/deepseek-v4.1-flash
-  # …every role uses the same model
+model: deepseek/deepseek-v4.1-flash   # every role uses this one model
 role_settings:                      # per-role output and thinking limits
   default:    {max_tokens: 4000, reasoning: {effort: medium, exclude: true}}
   hypothesis: {max_tokens: 8000, reasoning: {effort: medium, exclude: true}}
   patient:    {max_tokens: 1500, reasoning: {effort: low, exclude: true}}
   gatekeeper: {max_tokens: 800,  reasoning: {effort: low, exclude: true}}
 judge:
-  sdk: anthropic
-  model: claude-opus-5
+  model: claude-opus-5              # Anthropic SDK, not OpenRouter (D-021)
   auth: subscription
 ```
 

@@ -14,7 +14,6 @@ the only way to notice a patient model that has started fabricating.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, Sequence
 
 from pydantic import BaseModel
@@ -53,14 +52,14 @@ def render_history(history: Sequence[tuple[str, str]]) -> str:
     return "\n\n".join(f"Doctor: {q}\nYou: {a}" for q, a in history)
 
 
-def build_prompt(view: PatientView, question: str, config_dir: Path | None = None,
+def build_prompt(view: PatientView, question: str,
                  history: Sequence[tuple[str, str]] = ()) -> str:
     """Render the patient prompt from the view. No other case data is reachable.
 
     `history` is the patient's own earlier questions and answers (D-058) -- never
     results or findings, which the caller filters out.
     """
-    template = (config_dir or CONFIG_DIR).joinpath("prompts", PROMPT).read_text(encoding="utf-8")
+    template = CONFIG_DIR.joinpath("prompts", PROMPT).read_text(encoding="utf-8")
     extra = ""
     if view.extra_fields:
         extra = "\n".join(
@@ -83,14 +82,13 @@ def build_prompt(view: PatientView, question: str, config_dir: Path | None = Non
 class Patient:
     """Wraps a `PatientView` and an `LLMCaller`."""
 
-    def __init__(self, view: PatientView, caller: Any, config_dir: Path | None = None) -> None:
+    def __init__(self, view: PatientView, caller: Any) -> None:
         self.view = view
         self.caller = caller
-        self.config_dir = config_dir
 
     async def answer(self, question: str, *, case_id: str,
                      history: Sequence[tuple[str, str]] = ()) -> PatientReply:
-        prompt = build_prompt(self.view, question, self.config_dir, history)
+        prompt = build_prompt(self.view, question, history)
         return await self.caller.structured(  # type: ignore[return-value]
             PatientReply, prompt, case_id=case_id, node="ask_patient"
         )

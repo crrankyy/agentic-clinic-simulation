@@ -2,8 +2,8 @@
 
 The `Action` type is built **per run**, not declared as a static `Literal`.
 `OrchestratorDecision.action` becomes part of the JSON schema sent to the model,
-so a static five-member literal would offer `search_literature` in phases and
-configurations where the evidence agent does not exist. The model would then be
+so a static literal would offer an action in configurations where it is
+disabled. The model would then be
 *correct* to emit it, the output would validate, and the router would have no
 edge for it — a routing failure reachable by the model behaving properly.
 """
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, create_model
 from .state import DifferentialItem, RedFlag
 
 #: Every action the design knows about. A run enables a subset.
-ALL_ACTIONS = ("ask_patient", "request_exam", "order_test", "search_literature")
+ALL_ACTIONS = ("ask_patient", "request_exam", "order_test")
 
 MAX_DIFFERENTIAL = 8  # Q-14
 
@@ -35,7 +35,7 @@ def make_orchestrator_decision(enabled: frozenset[str]) -> type[BaseModel]:
     return create_model(
         "OrchestratorDecision",
         action=(make_action_type(enabled), ...),
-        argument=(str, Field(description="the question, exam region, test name or query")),
+        argument=(str, Field(description="the question, exam region or test name")),
         reason=(str, Field(description="why this action now")),
         # Brief §5.3's Test-selection sub-role lives here (D-026): "what result
         # would change the differential".

@@ -36,8 +36,6 @@ from agentclinic.llm.openrouter import (
     ProviderAuthError,
     ProviderUnavailable,
     RetryPolicy,
-    Usage,
-    UsageRecorder,
 )
 from graph_fixtures import FINAL, HYP, ScriptedPatient, build, decide
 
@@ -234,10 +232,7 @@ async def test_a_failed_call_does_not_recount_the_previous_calls_cost(tmp_path):
     guards = RunGuards(bucket=TokenBucket(rate_per_minute=6000),
                        daily=DailyRequestCounter(tmp_path / "d.json", limit=None),
                        spend=SpendTracker(per_case_cap=10, per_run_cap=10))
-    recorder = UsageRecorder()
-    recorder.last = Usage(cost=0.5, responded=True)     # a previous, paid call
-    caller, _ = _caller([_err(openai.RateLimitError, 429), HYP],
-                        guards=guards, recorder=recorder)
+    caller, _ = _caller([_err(openai.RateLimitError, 429), HYP], guards=guards)
     await caller.structured(HypothesisUpdate, "p", case_id="c", node="hypothesis")
     assert guards.spend.case_total("c") == 0.0
 
@@ -437,47 +432,48 @@ def paid_models():
     return load_models()
 
 
+def openrouter(routes):
+    """A client whose requests are answered from `{(method, path): (status, json)}`."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        status, body = routes[(request.method, request.url.path.removeprefix("/api/v1"))]
+        return httpx.Response(status, json=body)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
 async def test_preflight_reports_a_revoked_key(paid_models):
-    import respx
+    from agentclinic.llm.preflight import preflight
 
-    with respx.mock(base_url="https://openrouter.ai/api/v1") as mock:
-        mock.get("/key").respond(401, json={"error": {"message": "User not found.", "code": 401}})
-        from agentclinic.llm.preflight import preflight
-
-        r = await preflight(paid_models, api_key="sk-test")
+    client = openrouter({("GET", "/key"): (401, {"error": {"message": "User not found.",
+                                                           "code": 401}})})
+    r = await preflight(paid_models, api_key="sk-test", client=client)
     assert not r.ok and "rejected the API key" in r.reason and "User not found" in r.reason
 
 
 async def test_preflight_reports_an_account_guardrail_the_listing_cannot_see(paid_models):
     """2026-09-27: the listing said first-party DeepSeek served the model; every
     real call was refused by the account's training guardrail."""
-    import respx
+    from agentclinic.llm.preflight import preflight
 
-    model = paid_models.for_role("orchestrator")
     pin = paid_models.provider.pin[0]
-    with respx.mock(base_url="https://openrouter.ai/api/v1") as mock:
-        mock.get("/key").respond(200, json={"data": {"limit": 35, "limit_remaining": 1.2}})
-        mock.get(f"/models/{model}/endpoints").respond(200, json={"data": {"endpoints": [
-            {"provider_name": pin, "supported_parameters": ["tools", "tool_choice"]}]}})
-        mock.post("/chat/completions").respond(404, json={"error": {
+    client = openrouter({
+        ("GET", "/key"): (200, {"data": {"limit": 35, "limit_remaining": 1.2}}),
+        ("GET", f"/models/{paid_models.model}/endpoints"): (200, {"data": {"endpoints": [
+            {"provider_name": pin, "supported_parameters": ["tools", "tool_choice"]}]}}),
+        ("POST", "/chat/completions"): (404, {"error": {
             "message": "No endpoints found. Filter by Guardrails removed it "
-                       "(Paid model training violation (account settings))"}})
-        from agentclinic.llm.preflight import preflight
-
-        listing_only = await preflight(paid_models, api_key="sk-test")
-        routed = await preflight(paid_models, api_key="sk-test", routing=True)
+                       "(Paid model training violation (account settings))"}}),
+    })
+    listing_only = await preflight(paid_models, api_key="sk-test", client=client)
+    routed = await preflight(paid_models, api_key="sk-test", client=client, routing=True)
     assert listing_only.ok, "the listing alone cannot see the guardrail"
     assert not routed.ok and "training violation" in routed.reason
 
 
 async def test_preflight_refuses_an_exhausted_spend_limit_on_a_paid_model(paid_models):
-    import respx
+    from agentclinic.llm.preflight import preflight
 
-    with respx.mock(base_url="https://openrouter.ai/api/v1") as mock:
-        mock.get("/key").respond(200, json={"data": {"limit": 0, "limit_remaining": 0}})
-        from agentclinic.llm.preflight import preflight
-
-        r = await preflight(paid_models, api_key="sk-test")
+    client = openrouter({("GET", "/key"): (200, {"data": {"limit": 0, "limit_remaining": 0}})})
+    r = await preflight(paid_models, api_key="sk-test", client=client)
     assert not r.ok and "spend limit is exhausted" in r.reason
 
 
@@ -489,6 +485,18 @@ def test_the_cli_probe_and_run_commands_import(tmp_path):
     from agentclinic.cli import app
 
     result = CliRunner().invoke(app, ["probe", "--help"])
+    assert result.exit_code == 0, result.output
+
+
+def test_play_builds_a_real_patient_without_crashing(cases, monkeypatch):
+    """`play` without --stub-patient referenced an undefined `budgets` and died
+    with a NameError before the first prompt. Quitting at once makes no call."""
+    from typer.testing import CliRunner
+
+    from agentclinic.cli import app
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-not-real")
+    result = CliRunner().invoke(app, ["play", "medqa-0002"], input="quit\n")
     assert result.exit_code == 0, result.output
 
 

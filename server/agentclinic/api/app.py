@@ -15,14 +15,14 @@ import re
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..config import load_budgets, load_dotenv, load_models
+from ..config import load_budgets, load_dotenv
+from ..eval.runmeta import read_json, read_run_meta
+from ..llm.factory import projected_requests
 from ..paths import CLIENT_DIR, RUNS_DIR
-from ..eval.runmeta import read_run_meta
 from .engine import CONFIGS, Engine, replay_events, stream_live
 
 DISCLAIMER = (
@@ -33,13 +33,6 @@ DISCLAIMER = (
 )
 
 app = FastAPI(title="AgentClinic — encounter viewer", version="0.1.0")
-
-# The client is served from this same app in normal use. CORS is here only so a
-# separate dev server (vite, `python -m http.server`) can talk to it locally.
-app.add_middleware(
-    CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["*"], allow_headers=["*"],
-)
 
 _engine: Engine | None = None
 
@@ -67,7 +60,7 @@ async def meta() -> dict[str, Any]:
     _, per_day = budgets.request_limits(models.is_free)
     return {
         "disclaimer": DISCLAIMER,
-        "model": models.for_role("orchestrator"),
+        "model": models.model,
         "provider_pin": models.provider.pin,
         "configs": list(CONFIGS),
         # D-062: a request allowance only exists on the free tier.
@@ -81,30 +74,22 @@ async def meta() -> dict[str, Any]:
     }
 
 
-def _case_stop(run_dir: Any, case_id: str) -> str | None:
-    """A case's stop reason: its summary.json (web runs), else the trace's
-    case_end record, else inferred from the transcript (older CLI runs)."""
-    from ..eval.runner import _infer_stop
-    from ..graphs.state import Event
-
-    summary = _summary(run_dir)
-    if summary.get("stop_reason") and summary.get("case_id") in (None, case_id):
-        return summary["stop_reason"]
+def _case_stop(run_dir: Any, case_id: str, summary: dict[str, Any]) -> str | None:
+    """A web run's summary.json, else the `case_end` record the CLI runner writes."""
+    if summary.get("case_id") == case_id:
+        return summary.get("stop_reason")
     trace = run_dir / "traces" / f"{case_id}.jsonl"
-    if not trace.exists():
-        return None
-    events = []
     for line in trace.read_text(encoding="utf-8").splitlines():
-        try:
-            r = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if r.get("kind") == "node" and r.get("event") == "case_end":
-            return r.get("stop_reason")
-        if r.get("kind") == "event":
-            events.append(Event(turn=r["turn"], kind=r["event_kind"], actor=r["actor"],
-                                text=r["text"], meta=r.get("meta") or {}))
-    return _infer_stop(events)
+        record = json.loads(line)
+        if record.get("event") == "case_end":
+            return record.get("stop_reason")
+    return None
+
+
+def _status(summary: dict[str, Any], finals: dict[str, Any], case_id: str) -> str:
+    # A web run with no summary.json never reached its finally block: the
+    # process died mid-run. It is not "finished" (M-19).
+    return summary.get("status") or ("finished" if case_id in finals else "incomplete")
 
 
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,120}")
@@ -130,37 +115,6 @@ def _recorded(run_dir: Any, case_id: str | None) -> bool:
         run_dir / "traces" / f"{case_id}.jsonl").is_file()
 
 
-def _started(run_dir: Any, meta: dict[str, Any]) -> str:
-    """When the run began: run.json, else the earliest trace record."""
-    if meta.get("started_utc"):
-        return str(meta["started_utc"])
-    first: list[str] = []
-    for trace in (run_dir / "traces").glob("*.jsonl"):
-        with trace.open(encoding="utf-8") as fh:
-            line = fh.readline()
-        try:
-            first.append(json.loads(line)["ts"])
-        except (json.JSONDecodeError, KeyError):
-            continue
-    return min(first) if first else ""
-
-
-def _trace_has_error(run_dir: Any, case_id: str) -> bool:
-    """Runs from before summary.json still recorded their failure in the trace."""
-    trace = run_dir / "traces" / f"{case_id}.jsonl"
-    return trace.exists() and '"kind": "error"' in trace.read_text(encoding="utf-8")
-
-
-def _summary(run_dir: Any) -> dict[str, Any]:
-    path = run_dir / "summary.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
 @app.get("/api/cases")
 def cases() -> list[dict[str, Any]]:
     """The three served cases. Objective only — this is the doctor's view."""
@@ -174,7 +128,7 @@ def runs() -> list[dict[str, Any]]:
     e = engine()
     out: list[dict[str, Any]] = [
         {"run_id": h.run_id, "case_id": h.case_id, "config": h.config,
-         "model": e.models.for_role("orchestrator"), "started": h.started_utc,
+         "model": e.models.model, "started": h.started_utc,
          "status": h.status, "source": "live", "events": len(h.events)}
         for h in e.runs.values()
     ]
@@ -195,27 +149,14 @@ def runs() -> list[dict[str, Any]]:
                 n = len(replay_events(d, case_id))
                 if not n:
                     continue  # recorded before events were persisted
-                summary = _summary(d)
-                meta = read_run_meta(d)
-                finals = {}
-                if (d / "finals.json").exists():
-                    try:
-                        finals = json.loads((d / "finals.json").read_text(encoding="utf-8"))
-                    except json.JSONDecodeError:
-                        finals = {}
-                # A web run with no summary.json never reached its finally
-                # block: the process died mid-run. It is not "finished".
+                summary, meta = read_json(d / "summary.json"), read_run_meta(d)
+                finals = read_json(d / "finals.json")
                 out.append({"run_id": d.name, "case_id": case_id,
-                            "config": meta.get("config") or summary.get("config") or (
-                                "panel" if "panel" in d.name else "single_doctor"),
-                            "model": meta.get("model"),
+                            "config": meta.get("config"), "model": meta.get("model"),
                             "provider_pin": meta.get("provider_pin"),
-                            "status": summary.get("status") or (
-                                "finished" if case_id in finals
-                                else "failed" if _trace_has_error(d, case_id)
-                                else "incomplete"),
-                            "stop_reason": _case_stop(d, case_id),
-                            "started": _started(d, meta),
+                            "status": _status(summary, finals, case_id),
+                            "stop_reason": _case_stop(d, case_id, summary),
+                            "started": meta.get("started_utc", ""),
                             "source": "replay", "events": n})
     # Latest run first; cases within a run in case order.
     out.sort(key=lambda r: r["case_id"])
@@ -243,7 +184,7 @@ async def start_run(body: StartRun) -> dict[str, Any]:
 
     # The same pre-flight the CLI refuses on. Discovering the daily cap mid-run
     # turns a watchable encounter into a wall of 429s. Free tier only (D-062).
-    projected = e.projected_requests(body.config, body.max_turns)
+    projected = projected_requests(body.config, body.max_turns)
     remaining = e.daily_remaining()
     if remaining is not None and projected > remaining:
         raise HTTPException(429, f"this run needs roughly {projected} requests but "
@@ -278,27 +219,20 @@ async def stream(run_id: str, start: int = Query(0, ge=0),
         if not events:
             raise HTTPException(404, "that run has no persisted transcript "
                                      "(recorded before events were saved)")
-        final = None
-        finals_path = run_dir / "finals.json"
-        if finals_path.exists():
-            final = json.loads(finals_path.read_text(encoding="utf-8")).get(case_id)
-        summary = _summary(run_dir)
-        meta = read_run_meta(run_dir)
-        stop_reason = _case_stop(run_dir, case_id)
+        finals = read_json(run_dir / "finals.json")
+        summary, meta = read_json(run_dir / "summary.json"), read_run_meta(run_dir)
+        stop_reason = _case_stop(run_dir, case_id, summary)
 
         async def replay() -> AsyncIterator[str]:
             for ev in events[start:]:
                 yield _sse({"type": "event", "data": ev})
             # The recorded outcome, not an assumed one (M-19).
             yield _sse({"type": "status", "data": {
-                "status": summary.get("status") or (
-                    "finished" if final else "failed" if _trace_has_error(run_dir, case_id)
-                    else "incomplete"),
-                "stop_reason": stop_reason, "final": final, "model": meta.get("model"),
+                "status": _status(summary, finals, case_id),
+                "stop_reason": stop_reason, "final": finals.get(case_id),
+                "model": meta.get("model"),
                 "error": summary.get("error"), "error_class": summary.get("error_class"),
-                "run_id": run_id, "case_id": case_id,
-                "config": summary.get("config") or (
-                    "panel" if "panel" in run_id else "single_doctor")}})
+                "run_id": run_id, "case_id": case_id, "config": meta.get("config")}})
         gen = replay()
 
     return StreamingResponse(gen, media_type="text/event-stream", headers={

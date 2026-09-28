@@ -81,9 +81,6 @@ class CaseStore:
     def __init__(self, cases: list[Case]) -> None:
         self._cases: dict[str, Case] = {c.case_id: c for c in cases}
 
-    def __len__(self) -> int:
-        return len(self._cases)
-
     def case_ids(self) -> list[str]:
         return sorted(self._cases)
 

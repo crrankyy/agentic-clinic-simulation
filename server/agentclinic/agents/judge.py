@@ -35,8 +35,8 @@ class JudgeCallCapExceeded(RuntimeError):
     """The per-run judge call cap was hit — it is the judge's only limit."""
 
 
-def build_prompt(view: JudgeView, final: FinalAnswer, config_dir: Path | None = None) -> str:
-    template = (config_dir or CONFIG_DIR).joinpath("prompts", "judge.md").read_text(encoding="utf-8")
+def build_prompt(view: JudgeView, final: FinalAnswer) -> str:
+    template = CONFIG_DIR.joinpath("prompts", "judge.md").read_text(encoding="utf-8")
     differential = "\n".join(
         f"{i}. {d.diagnosis}" for i, d in enumerate(final.differential, 1)
     ) or "(empty)"
@@ -56,19 +56,15 @@ class Judge:
         max_calls_per_run: int = 200,
         client: Any = None,
         tracer: Any = None,
-        config_dir: Path | None = None,
         require_subscription: bool = True,
     ) -> None:
         self.model = model
         self.max_calls_per_run = max_calls_per_run
         self._client = client
         self.tracer = tracer
-        self.config_dir = config_dir
         #: D-046: refuse to fall back to API-key billing without it being asked for.
         self.require_subscription = require_subscription
         self.calls = 0
-        self.tokens_in = 0
-        self.tokens_out = 0
 
     def auth_mode(self) -> str:
         """Which credential the SDK will actually use, resolved the same way it does.
@@ -119,7 +115,7 @@ class Judge:
             )
         self.calls += 1
 
-        prompt = build_prompt(view, final, self.config_dir)
+        prompt = build_prompt(view, final)
         client = self._ensure_client()
         parsed = await client.messages.parse(
             model=self.model,
@@ -136,11 +132,6 @@ class Judge:
                 f"judge returned no parsed output for {case_id} "
                 f"(stop_reason={getattr(parsed, 'stop_reason', None)})"
             )
-
-        usage = getattr(parsed, "usage", None)
-        if usage is not None:
-            self.tokens_in += int(getattr(usage, "input_tokens", 0) or 0)
-            self.tokens_out += int(getattr(usage, "output_tokens", 0) or 0)
 
         if self.tracer is not None:
             # Judge records go to judge.jsonl only — never a per-case trace,

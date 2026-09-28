@@ -77,10 +77,6 @@ class CaseResult:
     #: Executed actions after the leading diagnosis last changed.
     actions_after_leader_settled: int | None = None
     transient_failures: int = 0
-    #: False when this row was reconstructed by `rebuild_results` rather than
-    #: measured live. The behaviour counters are then partly approximate and
-    #: partly absent, and the report must not present them as measurements.
-    behaviour_recovered: bool = True
     #: The ordered differential, kept so the judge can be re-run later without
     #: re-running the encounter. `results.csv` gets the names; `finals.json`
     #: keeps the whole answer.
@@ -136,16 +132,44 @@ def result_from_row(row: dict[str, Any]) -> CaseResult:
     return CaseResult(**kwargs)
 
 
-def _infer_stop(events: Sequence[Event]) -> str | None:
-    """stop_reason from the transcript, for runs recorded before `case_end`."""
-    for e in reversed(list(events)):
-        if e.kind == "stop" and e.actor == "system" and e.text.startswith("stop condition: "):
-            return e.text.removeprefix("stop condition: ")
-        if e.kind in ("provider_error",):
-            return "provider_error"
-    if any(e.kind == "stop" and e.actor == "doctor" for e in events):
-        return "finalize"
-    return None
+def _result(case: Case, outcome: Outcome, error: str | None = None) -> CaseResult:
+    return CaseResult(case_id=case.case_id, outcome=outcome,
+                      error=error[:400] if error else None,
+                      dx_in_results=case.dx_in_results,
+                      dx_tokens_in_results=case.dx_tokens_in_results)
+
+
+def apply_verdict(result: CaseResult, final: Any, verdict: Any) -> None:
+    """Record a judged answer: the model's verdict or a hand-assigned one."""
+    result.outcome, result.error = "scored", None
+    result.diagnosis = final.diagnosis
+    result.differential = [d.diagnosis for d in final.differential]
+    result.match_type = verdict.match_type
+    result.judge_correct = verdict.correct
+    result.lenient_correct = verdict.lenient_correct
+    result.top_1, result.top_3, result.top_5 = (top_k(verdict, k) for k in (1, 3, 5))
+    result.in_differential = any(verdict.entry_matches)
+
+
+async def drive(graph: Any, initial: Any, *, recursion_limit: int,
+                on_event: Callable[[int, Event], Any], state: dict[str, Any]) -> None:
+    """Stream an encounter, calling `on_event` once per new transcript entry.
+
+    `encounter_log` is append-only (an `operator.add` reducer), so everything
+    past the high-water mark is new. `state` is updated in place, so a caller
+    keeps the last state even when this raises -- with `ainvoke` a crashed or
+    timed-out case kept no transcript and no counters at all (M-38).
+    """
+    seen = 0
+    async for chunk in graph.astream(initial, {"recursion_limit": recursion_limit},
+                                     stream_mode="values"):
+        state.clear()
+        state.update(chunk)
+        log = chunk.get("encounter_log") or []
+        for seq in range(seen, len(log)):
+            on_event(seq, log[seq])
+        seen = len(log)
+        await asyncio.sleep(0)   # let stream subscribers run between chunks
 
 
 def _derive(events: Sequence[Event]) -> dict[str, Any]:
@@ -211,32 +235,18 @@ async def run_case(
     case must not hold up a run.
     """
     started = time.monotonic()
-    result = CaseResult(
-        case_id=case.case_id, outcome="crash",
-        dx_in_results=case.dx_in_results, dx_tokens_in_results=case.dx_tokens_in_results,
-    )
+    result = _result(case, "crash")
     state: dict[str, Any] = {}
-    persisted = 0
 
-    async def consume(graph: Any, initial: Any) -> None:
-        # Streamed, and persisted as it goes (M-38). With `ainvoke` a crashed or
-        # timed-out case kept no transcript and no counters at all -- D-054 was
-        # only half applied -- and the web path and this one could not be
-        # compared on a failed case.
-        nonlocal state, persisted
-        async for chunk in graph.astream(initial, {"recursion_limit": recursion_limit},
-                                         stream_mode="values"):
-            state = chunk
-            log = chunk.get("encounter_log") or []
-            if tracer is not None:
-                for seq in range(persisted, len(log)):
-                    tracer.event(case_id=case.case_id, event=log[seq], seq=seq)
-            persisted = len(log)
+    def on_event(seq: int, event: Event) -> None:
+        if tracer is not None:
+            tracer.event(case_id=case.case_id, event=event, seq=seq)
 
     try:
         graph = build_graph(case.case_id)
         view = store.doctor_view(case.case_id)
-        coro = consume(graph, new_state(case.case_id, view.objective_for_doctor))
+        coro = drive(graph, new_state(case.case_id, view.objective_for_doctor),
+                     recursion_limit=recursion_limit, on_event=on_event, state=state)
         await (asyncio.wait_for(coro, timeout=case_deadline_s) if case_deadline_s else coro)
     except (ProviderAuthError, ProviderConfigError, DailyCapExceeded):
         # Run-fatal: every later case would fail the same way. The evaluation
@@ -317,13 +327,7 @@ async def run_case(
                     tracer.judge(case_id=case.case_id, event="judge_error",
                                  error_type=type(exc).__name__, error_message=str(exc)[:500])
             else:
-                result.match_type = verdict.match_type
-                result.judge_correct = verdict.correct
-                result.lenient_correct = verdict.lenient_correct
-                result.top_1 = top_k(verdict, 1)
-                result.top_3 = top_k(verdict, 3)
-                result.top_5 = top_k(verdict, 5)
-                result.in_differential = any(verdict.entry_matches)
+                apply_verdict(result, final, verdict)
 
     result.latency_s = time.monotonic() - started
     return result
@@ -352,10 +356,7 @@ async def run_evaluation(
             if fatal:
                 # A dead key or an unserved model fails every case the same
                 # way; record why instead of spending a request to find out.
-                return CaseResult(case_id=case.case_id, outcome="error",
-                                  error=f"aborted: {type(fatal[0]).__name__}",
-                                  dx_in_results=case.dx_in_results,
-                                  dx_tokens_in_results=case.dx_tokens_in_results)
+                return _result(case, "error", f"aborted: {type(fatal[0]).__name__}")
             try:
                 return await run_case(case=case, store=store, build_graph=build_graph,
                                       judge=judge, recursion_limit=recursion_limit,
@@ -363,23 +364,10 @@ async def run_evaluation(
                                       finals=finals, case_deadline_s=case_deadline_s)
             except (ProviderAuthError, ProviderConfigError, DailyCapExceeded) as exc:
                 fatal.append(exc)
-                return CaseResult(case_id=case.case_id, outcome="error",
-                                  error=f"{type(exc).__name__}: {exc}"[:400],
-                                  dx_in_results=case.dx_in_results,
-                                  dx_tokens_in_results=case.dx_tokens_in_results)
+                return _result(case, "error", f"{type(exc).__name__}: {exc}")
 
-    # return_exceptions keeps one pathological case from cancelling its siblings;
-    # run_case already contains its own failures, so this is belt and braces.
-    gathered = await asyncio.gather(*(one(c) for c in cases), return_exceptions=True)
-    results = []
-    for case, item in zip(cases, gathered):
-        if isinstance(item, BaseException):
-            results.append(CaseResult(case_id=case.case_id, outcome="crash",
-                                      error=f"{type(item).__name__}: {item}"[:400],
-                                      dx_in_results=case.dx_in_results,
-                                      dx_tokens_in_results=case.dx_tokens_in_results))
-        else:
-            results.append(item)
+    # run_case contains every other failure itself, so nothing reaches gather.
+    results = await asyncio.gather(*(one(c) for c in cases))
     return sorted(results, key=lambda r: r.case_id)
 
 
@@ -417,24 +405,10 @@ def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResu
     expensive half (hundreds of requests); the bookkeeping is derivable, so
     losing the CSV should not mean re-running them.
 
-    Runs recorded from the event-persistence change onward carry their full
-    transcript in the trace, so the counters come back exact and
-    `behaviour_recovered` stays True.
-
-    For a run recorded **before** that, events existed only in graph state and
-    `results.csv` was their only sink. The counters are then reconstructed from
-    the per-node LLM calls and are strictly weaker than the live ones:
-
-    * `patient_questions` is exact (`ask_patient` always calls the model).
-    * `turns` and `tests_ordered` are **lower bounds**: the gatekeeper calls the
-      model only when the exact/contains/synonym/leaf tiers all miss (D-045), so
-      a cheaply-resolved test leaves no record here.
-    * `exams_requested`, `unlisted_tests`, `match_tiers`, `red_flag_turn`,
-      `patient_unknown_rate`, `test_cost_usd`, `stop_reason` and `forced_stop`
-      are **not recoverable at all** and stay at their defaults.
-
-    `behaviour_recovered=False` marks the row so the report says this rather
-    than printing the defaults as though they were measured zeros.
+    The trace carries the full transcript (D-054) and a `case_end` record per
+    finished case, so the counters come back exact. A run recorded before
+    events were persisted cannot be rebuilt, and says so rather than printing
+    defaults as though they were measured zeros.
     """
     import json
 
@@ -461,39 +435,22 @@ def rebuild_results(run_dir: Path, cases_by_id: dict[str, Any]) -> list[CaseResu
             result.latency_s = sum(r.get("latency_s", 0.0) for r in calls)
             result.api_cost_usd = sum(r.get("cost") or 0.0 for r in calls)
             result.parse_failures = sum(1 for r in records if r.get("event") == "parse_failure")
-            # One `check_stop` runs per executed action, and it is the sole
-            # writer of `turn`, so counting action calls recovers the turn count.
-            persisted = [r for r in records if r.get("kind") == "event"]
-            if persisted:
-                # The transcript survived, so the counters are the real ones.
-                events = [Event(turn=r["turn"], kind=r["event_kind"],
-                                actor=r["actor"], text=r["text"],
-                                meta=r.get("meta") or {}) for r in persisted]
-                for key, value in _derive(events).items():
-                    setattr(result, key, value)
-                result.turns = max((e.turn for e in events), default=0)
-                end = next((r for r in reversed(records) if r.get("kind") == "node"
-                            and r.get("event") == "case_end"), None)
-                if end is not None:
-                    result.stop_reason = end.get("stop_reason")
-                    result.turns = int(end.get("turns") or result.turns)
-                    result.test_cost_usd = float(end.get("test_cost_usd") or 0.0)
-                else:
-                    result.stop_reason = _infer_stop(events)
-                    result.test_cost_usd = sum(
-                        float((e.meta or {}).get("cost_usd") or 0) for e in events
-                        if e.actor == "gatekeeper")
-                result.forced_stop = result.stop_reason not in (None, "finalize")
-                result.transient_failures = sum(
-                    1 for r in records if r.get("kind") == "llm_call"
-                    and r.get("status") == "failed" and r.get("error_class") not in (None, "content"))
-            else:
-                # A run recorded before events were persisted. Approximate, and
-                # say so — see `behaviour_recovered` below.
-                result.patient_questions = sum(1 for r in calls if r.get("node") == "ask_patient")
-                result.tests_ordered = sum(1 for r in calls if r.get("node") == "gatekeeper")
-                result.turns = sum(1 for r in calls if r.get("node") in
-                                   {"ask_patient", "gatekeeper", "search_literature"})
-                result.behaviour_recovered = False
+            events = [Event(turn=r["turn"], kind=r["event_kind"], actor=r["actor"],
+                            text=r["text"], meta=r.get("meta") or {})
+                      for r in records if r.get("kind") == "event"]
+            if not events:
+                raise ValueError(f"{trace} was recorded before events were persisted "
+                                 "(D-054); its counters cannot be rebuilt")
+            for key, value in _derive(events).items():
+                setattr(result, key, value)
+            # A crashed case has no `case_end`; its stop reason stays None.
+            end = next((r for r in records if r.get("event") == "case_end"), {})
+            result.stop_reason = end.get("stop_reason")
+            result.turns = int(end.get("turns") or max(e.turn for e in events))
+            result.test_cost_usd = float(end.get("test_cost_usd") or 0.0)
+            result.forced_stop = result.stop_reason not in (None, "finalize")
+            result.transient_failures = sum(
+                1 for r in calls
+                if r.get("status") == "failed" and r.get("error_class") not in (None, "content"))
         out.append(result)
     return sorted(out, key=lambda r: r.case_id)

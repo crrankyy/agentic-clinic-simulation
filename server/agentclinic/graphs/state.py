@@ -25,7 +25,7 @@ from typing import Annotated, Any, Literal, TypedDict
 from pydantic import BaseModel, Field
 
 EventKind = Literal[
-    "objective", "question", "answer", "exam", "test", "literature",
+    "objective", "question", "answer", "exam", "test",
     "hypothesis", "challenge", "cost_objection", "red_flag",
     "unlisted_test", "parse_failure", "budget", "stop",
     # D-056: a proposed action the repeat guard rejected before it executed.
@@ -34,13 +34,13 @@ EventKind = Literal[
     "provider_error",
 ]
 
-#: The kinds that carry *evidence*: what was asked, examined, tested, read, and
+#: The kinds that carry *evidence*: what was asked, examined and tested, and
 #: what came back. The hypothesis node sees only these (D-058). Everything else
 #: is the doctor's own earlier output or harness bookkeeping, and re-reading it
 #: as if it were evidence anchors the model on its own past guesses.
-EVIDENCE_KINDS = frozenset({"objective", "question", "answer", "exam", "test", "literature"})
+EVIDENCE_KINDS = frozenset({"objective", "question", "answer", "exam", "test"})
 
-Actor = Literal["doctor", "patient", "gatekeeper", "evidence", "system"]
+Actor = Literal["doctor", "patient", "gatekeeper", "system"]
 
 StopReason = Literal["finalize", "turn_cap", "spend_cap", "request_cap",
                      "budget_exhausted", "parse_failure",
@@ -166,8 +166,7 @@ STATE_SOURCES: dict[str, tuple[str, ...]] = {
     "action": ("orchestrator",),
     "action_argument": ("orchestrator",),
     "encounter_log": ("brief", "hypothesis", "ask_patient", "request_exam", "order_test",
-                      "search_literature", "absorb_panel", "challenger_final",
-                      "check_stop", "finalize"),
+                      "absorb_panel", "challenger_final", "check_stop", "finalize"),
     "panel_events": ("doctor_panel", "absorb_panel"),
     # The orchestrator clears both after rendering them into its prompt, which is
     # what makes an opinion one-shot. Action nodes must NOT clear them.
@@ -177,7 +176,7 @@ STATE_SOURCES: dict[str, tuple[str, ...]] = {
     "differential": ("hypothesis",),
     "red_flags": ("hypothesis",),
     "challenged_this_finalize": ("challenger_final", "ask_patient", "request_exam",
-                                 "order_test", "search_literature"),
+                                 "order_test"),
     "budget_exhausted": ("budget_guard",),
     "spend_usd": ("check_stop",),
     "test_cost_usd": ("request_exam", "order_test"),

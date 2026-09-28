@@ -19,7 +19,7 @@ import os
 import random
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from langchain_core.callbacks import AsyncCallbackHandler
@@ -27,6 +27,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.outputs import LLMResult
 from pydantic import BaseModel, ValidationError
 
+from ..config import RetryPolicy
 from .guards import NonRetryable, RunGuards
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -103,11 +104,6 @@ def classify(exc: BaseException) -> str:
             or any(sig in msg for sig in _EMPTY_SIGNATURES)):
         return "empty"
     return CONTENT
-
-
-def _looks_empty(exc: BaseException) -> bool:
-    """True for 'the provider gave us nothing', including a hung stream."""
-    return classify(exc) in {"timeout", "empty"}
 
 
 def _retry_after(exc: BaseException) -> float | None:
@@ -245,15 +241,12 @@ class UsageRecorder(AsyncCallbackHandler):
 def build_chat_model(
     *,
     model: str,
-    temperature: float = 0.0,
     pin_provider: list[str] | None = None,
     allow_fallbacks: bool = False,
     timeout: float = 120.0,
-    max_retries: int = 3,
     attribution_title: str = "agent-clinic",
     max_tokens: int | None = None,
     reasoning: dict[str, Any] | None = None,
-    require_parameters: bool = False,
 ) -> BaseChatModel:
     """Build a `ChatOpenAI` aimed at OpenRouter.
 
@@ -272,8 +265,6 @@ def build_chat_model(
     extra_body: dict[str, Any] = {"usage": {"include": True}}
     if pin_provider is not None:
         extra_body["provider"] = {"order": pin_provider, "allow_fallbacks": allow_fallbacks}
-        if require_parameters:
-            extra_body["provider"]["require_parameters"] = True
     # D-061: bounded output and bounded thinking, per role. Unbounded, the free
     # model produced 32,768-token hypothesis calls three times and one of 38,987
     # (488 s) -- free then, billed on a paid model, and each a 120 s timeout.
@@ -284,46 +275,21 @@ def build_chat_model(
         model=model,
         base_url=OPENROUTER_BASE_URL,
         api_key=api_key,
-        temperature=temperature,
+        temperature=0.0,
         timeout=timeout,
-        max_retries=max_retries,
+        # 0: LLMCaller owns retries. SDK-internal retries would multiply the
+        # wall-clock deadline by (max_retries + 1) invisibly.
+        max_retries=0,
         default_headers={"X-Title": attribution_title},  # Q-06: no HTTP-Referer
         extra_body=extra_body,
         **({"max_tokens": int(max_tokens)} if max_tokens else {}),
     )
 
 
-#: Which model settings a node uses. The node name already identifies the role,
-#: so per-role models need no change to any graph builder (M-33: before D-061
-#: one chat model built from the orchestrator entry served every role, and the
-#: other entries in models.yaml were silently ignored).
-NODE_ROLE = {
-    "ask_patient": "patient",
-    "gatekeeper": "gatekeeper",
-    "hypothesis": "hypothesis",
-    "orchestrator": "orchestrator",
-    "finalize": "finalize",
-    "challenger": "challenger",
-    "cost_steward": "cost_steward",
-}
-
-
-@dataclass(frozen=True)
-class RetryPolicy:
-    """How each failure class is retried (Q-08, restored by D-059).
-
-    Content failures get a repair prompt, up to `content_attempts`. Transient
-    failures get jittered exponential backoff with the prompt unchanged, up to
-    `transient_attempts`, honouring Retry-After; timeouts are capped separately
-    because each one already cost a full `call_timeout`. Auth and config
-    failures are never retried.
-    """
-
-    content_attempts: int = 3
-    transient_attempts: int = 5
-    timeout_retries: int = 2
-    backoff_base_s: float = 2.0
-    backoff_cap_s: float = 60.0
+#: Which role's settings a node uses, where the node name is not the role name.
+#: Every other node is its own role (M-33: before D-061 one chat model built
+#: from the orchestrator entry served every role, and role settings were ignored).
+NODE_ROLE = {"ask_patient": "patient"}
 
 
 class LLMCaller:
@@ -337,7 +303,6 @@ class LLMCaller:
         self,
         model: BaseChatModel,
         guards: RunGuards | None = None,
-        recorder: UsageRecorder | None = None,
         tracer: Any = None,
         structured_method: str | None = None,
         call_timeout: float = 120.0,
@@ -358,11 +323,6 @@ class LLMCaller:
         #: event loop pumping an async generator. Only a total deadline bounds it.
         self.call_timeout = call_timeout
         self.guards = guards
-        #: Optional, kept for callers that read the last call's usage. Usage is
-        #: now captured by a fresh recorder per attempt: one shared mutable slot
-        #: re-counted the previous call's cost on every failure (M-14), and was
-        #: racy across concurrent cases.
-        self.recorder = recorder
         self.tracer = tracer
         self.retry = retry or RetryPolicy()
         self._sleep = sleep or asyncio.sleep
@@ -396,8 +356,6 @@ class LLMCaller:
         # never the previous call's, which is what the shared slot used to do.
         if self.guards is not None and usage.cost:
             self.guards.spend.add(case_id, usage.cost)
-        if self.recorder is not None and usage.responded:
-            self.recorder.last = usage
         if self.tracer is not None:
             self.tracer.llm_call(
                 case_id=case_id, node=node,
@@ -422,8 +380,6 @@ class LLMCaller:
         *,
         case_id: str,
         node: str,
-        attempts: int | None = None,
-        transient_retries: int | None = None,
     ) -> BaseModel:
         """Ask for schema-valid output, repairing only what a repair can fix.
 
@@ -433,10 +389,13 @@ class LLMCaller:
         would bypass `check_stop` and so escape both the turn cap and the spend
         cap. Transient failures back off and resend unchanged; auth and config
         failures raise at once (D-059).
+
+        Usage is captured by a fresh recorder per attempt: one shared mutable
+        slot re-counted the previous call's cost on every failure (M-14), and
+        was racy across concurrent cases.
         """
-        content_budget = attempts or self.retry.content_attempts
-        transient_budget = (transient_retries if transient_retries is not None
-                            else self.retry.transient_attempts)
+        content_budget = self.retry.content_attempts
+        transient_budget = self.retry.transient_attempts
         kwargs = {"method": self.structured_method} if self.structured_method else {}
         runnable = self.model_for(node).with_structured_output(schema, **kwargs)
         prompt = messages
@@ -532,15 +491,3 @@ class LLMCaller:
 
         self._record_failures(case_id, content_budget - guard_rejections)
         raise StructuredOutputFailed(schema.__name__, content_budget, last_error)
-
-    async def text(self, messages: Any, *, case_id: str, node: str) -> str:
-        await self._before(case_id)
-        started = time.monotonic()
-        rec = UsageRecorder()
-        result = await asyncio.wait_for(
-            self.model_for(node).ainvoke(messages, config={"callbacks": [rec]}),
-            timeout=self.call_timeout,
-        )
-        self._after(case_id, node, started, rec.last, status="ok", attempt=1)
-        content = getattr(result, "content", result)
-        return content if isinstance(content, str) else str(content)

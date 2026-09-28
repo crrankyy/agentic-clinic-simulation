@@ -27,7 +27,7 @@ Channel = Literal["encounter_log", "panel_events"]
 
 def budget_guarded(
     node: Callable, *, channel: Channel, skip_if_exhausted: bool = True,
-    on_content_failure: bool = True,
+    degrade_keys: tuple[str, ...] | None = None,
 ) -> Callable:
     """Turn a failed model call into a state update instead of an exception.
 
@@ -39,7 +39,7 @@ def budget_guarded(
       transient-retry budget (D-059). stop_reason `provider_error`, outcome
       `error`: a harness property, excluded from accuracy;
     * `StructuredOutputFailed` -- the repair budget spent (stop_reason
-      `parse_failure`), unless `on_content_failure=False`.
+      `parse_failure`), unless `degrade_keys` is given.
 
     Before D-059 only the orchestrator, finalize and the advisory nodes handled
     a failed call; one in `hypothesis` or `ask_patient` escaped as an exception
@@ -47,8 +47,11 @@ def budget_guarded(
     (c79bb4e6, turn 6). Auth and config failures are deliberately NOT caught:
     they are run-fatal, and the runner aborts on them.
 
-    `on_content_failure=False` is for advisory nodes, which degrade to "no
-    opinion" (D-049) via `advisory()` rather than ending the encounter.
+    `degrade_keys` is for advisory nodes. Their opinion keys are set to None --
+    "no opinion" (D-049) -- and the encounter continues. Letting the failure
+    propagate would crash the case and drop it from the accuracy denominator,
+    while the same failure in the orchestrator is a scored forced finalize: the
+    panel would lose cases the single doctor keeps.
 
     `skip_if_exhausted=False` is for `finalize`, which must still run after a
     breach — it is the node that produces the final answer, and there is no
@@ -84,8 +87,8 @@ def budget_guarded(
                                       "status": str(exc.status)})],
             }
         except StructuredOutputFailed as exc:
-            if not on_content_failure:
-                raise
+            if degrade_keys is not None:
+                return {**{k: None for k in degrade_keys}, "parse_failures": exc.attempts}
             return {
                 "budget_exhausted": True,
                 "stop_reason": "parse_failure",

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from .metrics import calibration_bins, paired_bootstrap, summarise, wilson
+from .metrics import calibration_bins, summarise, wilson
 from .runner import CaseResult
 
 DISCLAIMER = (
@@ -74,13 +74,7 @@ def _accuracy_block(title: str, results: Sequence[CaseResult]) -> list[str]:
     return lines
 
 
-def render(
-    results: Sequence[CaseResult],
-    meta: RunMetadata,
-    *,
-    comparison: Sequence[CaseResult] | None = None,
-    comparison_name: str = "single_doctor",
-) -> str:
+def render(results: Sequence[CaseResult], meta: RunMetadata) -> str:
     lines: list[str] = [
         f"# Run {meta.run_id} — {meta.config_name}",
         "",
@@ -124,81 +118,33 @@ def render(
     else:
         lines += ["(no scored cases)", ""]
 
-    if comparison is not None:
-        arm_a = {r.case_id: r.judge_correct for r in results if r.outcome == "scored"}
-        arm_b = {r.case_id: r.judge_correct for r in comparison if r.outcome == "scored"}
-        diff = paired_bootstrap(arm_a, arm_b)
-        cov_a = summarise([r.outcome for r in results], [r.judge_correct for r in results]).coverage
-        cov_b = summarise([r.outcome for r in comparison],
-                          [r.judge_correct for r in comparison]).coverage
-        lines += [
-            f"### {meta.config_name} minus {comparison_name}",
-            "",
-            f"- **Accuracy difference:** {diff.render()}",
-            f"- **Coverage:** {meta.config_name}="
-            + (f"{cov_a:.3f}" if cov_a is not None else "n/a")
-            + f"  {comparison_name}=" + (f"{cov_b:.3f}" if cov_b is not None else "n/a"),
-        ]
-        if cov_a is not None and cov_b is not None and abs(cov_a - cov_b) > 1e-9:
-            lines.append(
-                "- ⚠️ **Coverages differ, so the accuracy difference is not "
-                "interpretable.** Abstention-excluded accuracy rewards whichever arm "
-                "abstains more."
-            )
-        lines.append("")
-
     lines += ["### Behaviour", ""]
     tiers: Counter[str] = Counter()
     for r in results:
         tiers.update(r.match_tiers)
-    # A rebuilt run (D-050) never had its encounter events persisted, so most of
-    # this block is unmeasured. Printing the dataclass defaults would present
-    # "not recorded" as "observed zero" — the same failure the `n/a` handling
-    # elsewhere in this report exists to avoid.
-    rebuilt = [r for r in results if not r.behaviour_recovered]
-    if rebuilt:
-        lines += [
-            f"> ⚠️ **{len(rebuilt)} of {len(results)} cases were reconstructed "
-            "from `finals.json` and the traces (D-050), not measured live.** "
-            "Encounter events are not persisted, so for those cases `turns` and "
-            "`tests` are **lower bounds** — the gatekeeper only calls the model "
-            "when its cheap match tiers miss — and exams, unlisted requests, "
-            "match tiers, red flags and simulated cost were not recoverable at "
-            "all. They are shown as `n/a`, not as zero.",
-            "",
-        ]
-    partial = bool(rebuilt)
-    na = "n/a (not recorded)"
     lines += [
-        f"- turns: {sum(r.turns for r in results)}"
-        + (" (lower bound)" if partial else "")
-        + f" total, {sum(r.turns for r in results) / max(1, len(results)):.1f} mean",
-        f"- forced stops: " + (na if partial else
-                               f"{sum(r.forced_stop for r in results)}/{len(results)}"),
+        f"- turns: {sum(r.turns for r in results)} total, "
+        f"{sum(r.turns for r in results) / max(1, len(results)):.1f} mean",
+        f"- forced stops: {sum(r.forced_stop for r in results)}/{len(results)}",
         f"- patient questions: {sum(r.patient_questions for r in results)}; "
-        f"tests: {sum(r.tests_ordered for r in results)}"
-        + (" (lower bound)" if partial else "")
-        + "; exams: " + (na if partial else f"{sum(r.exams_requested for r in results)}"),
-        "- unlisted requests: " + (na if partial else
-                                   f"{sum(r.unlisted_tests for r in results)}"),
-        "- gatekeeper match tiers: " + (na if partial else f"{dict(tiers) or '(none)'}"),
-        "- simulated test cost: " + (na if partial else
-                                     f"${sum(r.test_cost_usd for r in results):.2f} "
-                                     "(illustrative prices, not a fee schedule)"),
+        f"tests: {sum(r.tests_ordered for r in results)}; "
+        f"exams: {sum(r.exams_requested for r in results)}",
+        f"- unlisted requests: {sum(r.unlisted_tests for r in results)}",
+        f"- gatekeeper match tiers: {dict(tiers) or '(none)'}",
+        f"- simulated test cost: ${sum(r.test_cost_usd for r in results):.2f} "
+        "(illustrative prices, not a fee schedule)",
         f"- parse failures: {sum(r.parse_failures for r in results)}",
         # D-056 / M-41: the redundancy the doctor used to waste turns on. None
         # of this was in a report, which is why the repeat loop surfaced only
         # when someone watched a transcript.
-        "- repeats blocked before they ran (no turn used): "
-        + (na if partial else f"{sum(r.guard_blocks for r in results)}"),
-        "- orders that re-delivered a record already received: "
-        + (na if partial else f"{sum(r.repeat_orders for r in results)}"),
-        "- actions that produced nothing new: "
-        + (na if partial else f"{sum(r.no_yield_actions for r in results)}"),
-        "- actions after the leading diagnosis settled: "
-        + (na if partial else ", ".join(
-            f"{r.case_id}={r.actions_after_leader_settled if r.actions_after_leader_settled is not None else 'n/a'}"
-            for r in results)),
+        f"- repeats blocked before they ran (no turn used): {sum(r.guard_blocks for r in results)}",
+        f"- orders that re-delivered a record already received: "
+        f"{sum(r.repeat_orders for r in results)}",
+        f"- actions that produced nothing new: {sum(r.no_yield_actions for r in results)}",
+        "- actions after the leading diagnosis settled: " + ", ".join(
+            f"{r.case_id}="
+            f"{'n/a' if r.actions_after_leader_settled is None else r.actions_after_leader_settled}"
+            for r in results),
         f"- transient provider failures (retried): {sum(r.transient_failures for r in results)}",
         "",
     ]
@@ -226,19 +172,12 @@ def render(
         "|---|---|---|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for r in results:
-        # M-47: a rebuilt row's telemetry was never recorded; print n/a, not 0.
-        rec = r.behaviour_recovered
         lines.append(
             f"| {r.case_id} | {r.outcome} | {r.match_type or '—'} | {r.final_confidence:.2f} "
-            f"| {r.turns}{'' if rec else '+'} | {r.tests_ordered}{'' if rec else '+'} "
-            f"| {r.unlisted_tests if rec else 'n/a'} | {r.guard_blocks if rec else 'n/a'} "
-            f"| {r.no_yield_actions if rec else 'n/a'} "
-            f"| {(r.stop_reason or '—') if rec else 'n/a'} "
+            f"| {r.turns} | {r.tests_ordered} | {r.unlisted_tests} | {r.guard_blocks} "
+            f"| {r.no_yield_actions} | {r.stop_reason or '—'} "
             f"| {'yes' if r.dx_in_results else ''} |"
         )
-    if any(not r.behaviour_recovered for r in results):
-        lines.append("")
-        lines.append("`+` = lower bound (reconstructed run, D-050); `n/a` = not recorded.")
     return "\n".join(lines) + "\n"
 
 

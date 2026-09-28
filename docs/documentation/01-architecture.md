@@ -143,7 +143,7 @@ decision; the orchestrator reads their opinions and chooses (**D-025**).
 |---|---|
 | What can each agent see? | `data/views.py` |
 | What flows through state? | `graphs/state.py` |
-| How does one turn execute? | `graphs/single_doctor.py`, `graphs/nodes.py` |
+| How does one turn execute? | `graphs/encounter.py`, `graphs/nodes.py` |
 | How does the panel differ? | `graphs/doctor_panel.py`, `graphs/encounter.py` |
 | How is a test request matched? | `agents/gatekeeper.py` |
 | What counts as a repeat? | `graphs/ledger.py` |
