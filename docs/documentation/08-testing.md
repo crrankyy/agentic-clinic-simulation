@@ -1,28 +1,30 @@
 # 8. Testing
 
 ```bash
-uv run pytest                    # 223 tests, ~7s, zero network access
+uv run pytest                    # 266 tests, ~13s, zero network access
 uv run pytest -m live            # deselected by default; touches real APIs
 ```
 
-**No test in the default run touches the network.** Graph tests drive
+**No test in the default run touches the network.** The preflight's HTTP calls
+are mocked with `respx`, and the web tests install a stub preflight. Graph tests drive
 `FakeChatModel`, which replays a scripted list of structured outputs and records
 `rendered_prompts` — which is how the isolation tests work: they assert on what a
 node *actually sent*, not on what it was supposed to send.
 
 | File | Tests | Subject |
 |---|---|---|
+| `test_sim_fixes.py` | 31 (+ parametrised) | The 2026-09-27 review: repeat guard, failure handling, gatekeeper, patient, preflight |
 | `test_gatekeeper.py` | 19 | The matching cascade — the hardest non-LLM problem here |
 | `test_panel.py` | 17 | Panel scheduling, advisory semantics, subgraph boundaries |
 | `test_runner.py` | 17 | Outcome mapping, crash containment, judging, rebuild |
-| `test_api.py` | 14 | The web surface, with isolation as the main subject |
+| `test_api.py` | 17 | The web surface, with isolation as the main subject |
 | `test_download_dataset.py` | 14 | Checksums, atomicity, idempotency |
 | `test_routing.py` | 13 | Every action, `RoutingError`, disabled-action repair |
 | `test_single_doctor.py` | 13 | End-to-end encounters, caps, isolation |
 | `test_metrics.py` | 12 | n=0 and n=1, paired bootstrap, calibration |
 | `test_leakage.py` | 11 | The leak rule, in **both** directions |
 | `test_loader.py`, `test_splits.py` | 20 | Irregular shapes, determinism |
-| `test_config.py` | 9 | Resolved configuration, derived values |
+| `test_config.py` | 11 | Resolved configuration, derived values |
 | `test_views.py` | 8 | Isolation at the view layer |
 | `test_interactive.py` | 8 | `interrupt()` / resume |
 | `test_guards.py` | 7 | Rate, daily, spend |
@@ -71,6 +73,14 @@ Each of these exists because something shipped, not because someone imagined it.
 | `test_an_unavailable_test_is_marked_in_the_summary_the_orchestrator_reads` | A refused test rendered identically to a fulfilled one, so the doctor re-ordered what it could not have |
 | `test_the_dataset_fixture_resolves_rather_than_skipping` | A moved path anchor turned **111 tests into skips** while the suite still reported success |
 | `test_orchestrator_prompt_contains_no_raw_event_text` | The summary copied transcript text, so the orchestrator read the log *through* it |
+| `test_a_refused_test_reordered_in_new_words_never_reaches_the_gatekeeper` | D-055's marker was in view at every re-order in 1491dcac; its test had checked only that the marker was rendered |
+| `test_the_guard_replayed_on_1491dcac_blocks_only_repeats` | Pins the guard's behaviour on the real transcript: turns 7, 9, 10, 12, 13, 14, 16, 17 |
+| `test_the_gatekeeper_never_returns_a_different_region` | "MRI spine" returned `MRI_Brain`, whose result names the diagnosis |
+| `test_a_failed_model_call_is_never_turned_into_a_refusal` | Three 429s became "not part of the case record at all" 2 ms later |
+| `test_a_revoked_key_fails_once_and_is_never_re_prompted` | A 401 was re-sent three times in 166 ms and reported as "did not validate" |
+| `test_a_failed_call_does_not_recount_the_previous_calls_cost` | A shared usage slot re-billed the previous call on every failure |
+| `test_the_last_answer_is_read_before_a_turn_cap_finalize` | On a cap, finalize never saw the last result |
+| `test_every_result_field_survives_the_csv_and_rejudge_round_trip` | A re-judged report dropped every field added after the judge command was written |
 
 ## Negative controls
 
@@ -80,6 +90,12 @@ the docstring where it applies:
 
 - `test_a_dangerous_alternative_reaches_the_orchestrator_with_its_likelihood`
 - `test_an_unavailable_test_is_marked_in_the_summary_the_orchestrator_reads`
+- every repeat-guard test (fail with `check_repeat` disabled)
+- `test_the_gatekeeper_never_returns_a_different_region` (fails under the old synonym rule)
+
+A lesson from D-055 sits behind this: a test that the fix is *rendered* does
+not show the behaviour changed. The guard tests count gatekeeper calls and
+turns spent, not strings.
 
 ## Conventions
 

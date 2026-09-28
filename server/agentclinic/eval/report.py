@@ -186,6 +186,20 @@ def render(
                                      f"${sum(r.test_cost_usd for r in results):.2f} "
                                      "(illustrative prices, not a fee schedule)"),
         f"- parse failures: {sum(r.parse_failures for r in results)}",
+        # D-056 / M-41: the redundancy the doctor used to waste turns on. None
+        # of this was in a report, which is why the repeat loop surfaced only
+        # when someone watched a transcript.
+        "- repeats blocked before they ran (no turn used): "
+        + (na if partial else f"{sum(r.guard_blocks for r in results)}"),
+        "- orders that re-delivered a record already received: "
+        + (na if partial else f"{sum(r.repeat_orders for r in results)}"),
+        "- actions that produced nothing new: "
+        + (na if partial else f"{sum(r.no_yield_actions for r in results)}"),
+        "- actions after the leading diagnosis settled: "
+        + (na if partial else ", ".join(
+            f"{r.case_id}={r.actions_after_leader_settled if r.actions_after_leader_settled is not None else 'n/a'}"
+            for r in results)),
+        f"- transient provider failures (retried): {sum(r.transient_failures for r in results)}",
         "",
     ]
 
@@ -208,15 +222,23 @@ def render(
         "",
         "### Per-case",
         "",
-        "| case | outcome | match | conf | turns | tests | unlisted | stop | leak |",
-        "|---|---|---|---:|---:|---:|---:|---|---|",
+        "| case | outcome | match | conf | turns | tests | unlisted | blocked | no-yield | stop | leak |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for r in results:
+        # M-47: a rebuilt row's telemetry was never recorded; print n/a, not 0.
+        rec = r.behaviour_recovered
         lines.append(
             f"| {r.case_id} | {r.outcome} | {r.match_type or '—'} | {r.final_confidence:.2f} "
-            f"| {r.turns} | {r.tests_ordered} | {r.unlisted_tests} | {r.stop_reason or '—'} "
+            f"| {r.turns}{'' if rec else '+'} | {r.tests_ordered}{'' if rec else '+'} "
+            f"| {r.unlisted_tests if rec else 'n/a'} | {r.guard_blocks if rec else 'n/a'} "
+            f"| {r.no_yield_actions if rec else 'n/a'} "
+            f"| {(r.stop_reason or '—') if rec else 'n/a'} "
             f"| {'yes' if r.dx_in_results else ''} |"
         )
+    if any(not r.behaviour_recovered for r in results):
+        lines.append("")
+        lines.append("`+` = lower bound (reconstructed run, D-050); `n/a` = not recorded.")
     return "\n".join(lines) + "\n"
 
 

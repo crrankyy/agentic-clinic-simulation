@@ -68,8 +68,9 @@ async def test_a_crash_becomes_a_result_rather_than_an_exception(cases):
     case = next(c for c in cases if c.case_id == "medqa-0010")
 
     class Exploding:
-        async def ainvoke(self, *a, **kw):
+        async def astream(self, *a, **kw):
             raise RuntimeError("boom: prompt was ...")
+            yield  # pragma: no cover — makes this an async generator
 
     result = await run_case(case=case, store=CaseStore(cases),
                             build_graph=lambda _c: Exploding(),
@@ -81,7 +82,8 @@ async def test_a_crash_becomes_a_result_rather_than_an_exception(cases):
 
 async def test_forced_stop_is_derived_from_the_stop_reason(cases):
     case = next(c for c in cases if c.case_id == "medqa-0010")
-    script = [HYP, decide("ask_patient", "q"), HYP, decide("ask_patient", "q2"), FINAL]
+    # HYP before FINAL: the hypothesis pass that reads the last result on a cap (M-07).
+    script = [HYP, decide("ask_patient", "q"), HYP, decide("ask_patient", "q2"), HYP, FINAL]
     factory, store = graph_factory(cases, script, max_turns=2)
     result = await run_case(case=case, store=store, build_graph=factory,
                             judge=FakeJudge(), recursion_limit=RECURSION)
@@ -226,8 +228,9 @@ async def test_a_hanging_call_is_bounded_by_the_case_deadline(cases):
     case = next(c for c in cases if c.case_id == "medqa-0010")
 
     class Hanging:
-        async def ainvoke(self, *a, **kw):
+        async def astream(self, *a, **kw):
             await asyncio.sleep(3600)
+            yield  # pragma: no cover — makes this an async generator
 
     result = await run_case(case=case, store=CaseStore(cases),
                             build_graph=lambda _c: Hanging(), judge=None,

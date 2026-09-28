@@ -9,27 +9,53 @@
 
 provider:
   base_url: https://openrouter.ai/api/v1
-  # D-043: one endpoint (Novita), so pinning costs nothing and guarantees a
-  # reported run cannot silently change provider mid-way.
-  pin: ["Novita"]
+  # D-061: deepseek/deepseek-v4.1-flash, pinned to Together. Chosen by
+  # `cli probe` on 2026-09-27 against the real nested schemas (the D-043
+  # procedure), forced tool calls:
+  #   Together      6/6 OK   hypothesis 5-8 s   orchestrator 4 s   $0.30/$1.20 per M
+  #   Fireworks     2/2 OK              17 s                 11 s   $0.22/$0.66
+  #   DeepInfra     2/2 OK              23 s                 14 s   $0.14/$0.42
+  #   InferenceNet  4/4 OK           63-91 s              36-59 s   $0.035/$0.29
+  #   DeepSeek, Parasail: refused by the account's guardrail ("Paid model
+  #   training violation (account settings)") -- an account privacy setting,
+  #   deliberately left alone.
+  # Together for speed: InferenceNet is 10-15x slower and near the 120 s
+  # timeout. DeepInfra is the cheaper fallback if cost matters more.
+  pin: ["Together"]
   allow_fallbacks: false
+  require_parameters: false
   attribution_title: agent-clinic   # Q-06: X-Title only, no HTTP-Referer
 
-# D-043: this model has tools + tool_choice but NO native structured outputs and
-# no response_format, so schemas are enforced by a FORCED TOOL CALL. Measured
-# against the real nested HypothesisUpdate: 2/2 at ~10s, full 8-item
-# differential. Options: function_calling | json_mode | json_schema.
+# Forced tool calls, as for every run so far, so the mechanism stays comparable.
+# The model also supports native structured outputs (json_schema); switching is
+# a deliberate decision, not a side effect of the model change.
 structured_output:
   method: function_calling
 
+# D-020's rule stands in its surviving half: ONE model for every role, so the
+# panel-vs-single comparison has no role/model confound. The ":free" half is
+# superseded by D-061 at the user's direction -- this model is paid.
 roles:
-  patient:       inclusionai/ling-3.0-flash-vl:free
-  gatekeeper:    inclusionai/ling-3.0-flash-vl:free
-  hypothesis:    inclusionai/ling-3.0-flash-vl:free
-  orchestrator:  inclusionai/ling-3.0-flash-vl:free
-  challenger:    inclusionai/ling-3.0-flash-vl:free
-  cost_steward:  inclusionai/ling-3.0-flash-vl:free
-  evidence:      inclusionai/ling-3.0-flash-vl:free
+  patient:       deepseek/deepseek-v4.1-flash
+  gatekeeper:    deepseek/deepseek-v4.1-flash
+  hypothesis:    deepseek/deepseek-v4.1-flash
+  orchestrator:  deepseek/deepseek-v4.1-flash
+  finalize:      deepseek/deepseek-v4.1-flash
+  challenger:    deepseek/deepseek-v4.1-flash
+  cost_steward:  deepseek/deepseek-v4.1-flash
+  evidence:      deepseek/deepseek-v4.1-flash
+
+# D-061: bounded output and bounded thinking, per role. Unbounded, hypothesis
+# calls reached 32,768 completion tokens three times and 38,987 once (488 s).
+# max_tokens includes reasoning. A reply cut off at the limit is repaired with
+# "be more concise", not silently truncated.
+role_settings:
+  default:      {max_tokens: 4000, reasoning: {effort: medium, exclude: true}}
+  patient:      {max_tokens: 1500, reasoning: {effort: low, exclude: true}}
+  gatekeeper:   {max_tokens: 800,  reasoning: {effort: low, exclude: true}}
+  hypothesis:   {max_tokens: 8000, reasoning: {effort: medium, exclude: true}}
+  orchestrator: {max_tokens: 4000, reasoning: {effort: medium, exclude: true}}
+  finalize:     {max_tokens: 6000, reasoning: {effort: medium, exclude: true}}
 
 # D-021: the judge runs on the Anthropic SDK, NOT OpenRouter. This is an
 # explicit, recorded override of brief §0.2. Two reasons: judge calls then do

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import BaseModel
 
@@ -47,8 +47,19 @@ def _render_value(value: Any) -> str:
     return str(value)
 
 
-def build_prompt(view: PatientView, question: str, config_dir: Path | None = None) -> str:
-    """Render the patient prompt from the view. No other case data is reachable."""
+def render_history(history: Sequence[tuple[str, str]]) -> str:
+    if not history:
+        return "(nothing yet -- this is the first question)"
+    return "\n\n".join(f"Doctor: {q}\nYou: {a}" for q, a in history)
+
+
+def build_prompt(view: PatientView, question: str, config_dir: Path | None = None,
+                 history: Sequence[tuple[str, str]] = ()) -> str:
+    """Render the patient prompt from the view. No other case data is reachable.
+
+    `history` is the patient's own earlier questions and answers (D-058) -- never
+    results or findings, which the caller filters out.
+    """
     template = (config_dir or CONFIG_DIR).joinpath("prompts", PROMPT).read_text(encoding="utf-8")
     extra = ""
     if view.extra_fields:
@@ -64,6 +75,7 @@ def build_prompt(view: PatientView, question: str, config_dir: Path | None = Non
         social_history=_render_value(view.social_history),
         review_of_systems=_render_value(view.review_of_systems),
         extra_fields=extra,
+        conversation=render_history(history),
         question=question,
     )
 
@@ -76,8 +88,9 @@ class Patient:
         self.caller = caller
         self.config_dir = config_dir
 
-    async def answer(self, question: str, *, case_id: str) -> PatientReply:
-        prompt = build_prompt(self.view, question, self.config_dir)
+    async def answer(self, question: str, *, case_id: str,
+                     history: Sequence[tuple[str, str]] = ()) -> PatientReply:
+        prompt = build_prompt(self.view, question, self.config_dir, history)
         return await self.caller.structured(  # type: ignore[return-value]
             PatientReply, prompt, case_id=case_id, node="ask_patient"
         )

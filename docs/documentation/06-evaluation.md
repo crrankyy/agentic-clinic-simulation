@@ -15,12 +15,23 @@ fans out across cases at the configured concurrency.
 | `crash` | exception, or no final answer | no |
 
 ```python
-HARNESS_STOPS = {"budget_exhausted", "request_cap", "parse_failure"}
+HARNESS_STOPS = {"budget_exhausted", "request_cap", "parse_failure", "provider_error"}
 ```
 
 The separation matters: **an error is a property of the harness, not of the
 doctor.** Counting a rate limit as a wrong answer would make the accuracy figure
 a measure of the free tier.
+
+### Streaming, and run-fatal failures
+
+`run_case` streams the graph and persists each event as it arrives (M-38). With
+a single `ainvoke`, a crashed or timed-out case kept no transcript and no
+counters; now the events before a crash are on disk and counted.
+
+A revoked key, an unserved model or an exhausted daily allowance
+(`ProviderAuthError`, `ProviderConfigError`, `DailyCapExceeded`) fails every
+case the same way, so `run_evaluation` stops after the first: the remaining
+cases are recorded as `error: aborted` without spending a request each.
 
 ### Crash containment
 
@@ -59,12 +70,31 @@ exact. For older runs the counters are derived from per-node LLM calls and are
   recoverable at all**
 
 Such rows carry `behaviour_recovered=False` and the report prints
-`n/a (not recorded)`.
+`n/a (not recorded)` — in the summary and, since M-47, in the per-case table.
+
+Each case now ends with a `case_end` trace record (stop reason, turns, test
+cost), so a rebuild is exact; for older runs the stop reason is inferred from
+the transcript. The `judge` command rebuilds a result from **every** field by
+its declared type — it used to copy a hand-kept list, and every field added
+later came back as its default.
 
 > That flag exists because the first version silently printed the dataclass
 > defaults: `exams: 0`, `unlisted requests: 0`, `match tiers: (none)` — for a run
 > that had ordered 25 tests. "Never recorded" rendered as "observed zero". The
 > function's own docstring had claimed the counts matched the live path.
+
+### Redundancy metrics — M-41
+
+The repeat loop surfaced only because someone watched a transcript: no report
+counted it. Each result now carries:
+
+| Field | Meaning |
+|---|---|
+| `guard_blocks` | proposals rejected as repeats before they ran (no turn used) |
+| `repeat_orders` | orders that reached the gatekeeper and re-delivered a record |
+| `no_yield_actions` | executed actions that produced nothing new |
+| `actions_after_leader_settled` | actions after the leading diagnosis last changed |
+| `transient_failures` | provider failures retried successfully |
 
 ## Metrics — `eval/metrics.py`
 
@@ -120,24 +150,32 @@ verdicts were not produced by a model.
 
 Three cases, `medqa-0002 / 0009 / 0012`, hand-judged.
 
-| | single_doctor | panel |
-|---|---|---|
-| Strict accuracy | 1.000 (3/3), CI [0.44, 1.00] | 0.667 (2/3), CI [0.21, 0.94] |
-| top-1 / top-3 | 3/3 · 3/3 | 2/3 · 3/3 |
-| Mean confidence | 0.84 | 0.43 |
-| Turns | 37 | 50 |
+| | single_doctor (ling) | panel (ling) | single_doctor (DeepSeek + D-056..062) |
+|---|---|---|---|
+| Strict accuracy | 3/3 | 2/3 | 3/3 |
+| Actions | 37 (13 / 20 / 4) | 50 | **9 (3 / 4 / 2)** |
+| Turn-cap stops | 1 | 0 | 0 |
+| Tests ordered | 16 | 25+ | 5 |
+| Refused / re-delivered orders | 3 / ≥7 | n/a | 1 / 0 |
+| Cost | $0 | $0 | $0.027 |
 
-`panel − single_doctor: −0.333, 95% CI [−1.000, 0.000]`.
+`panel − single_doctor (ling): −0.333, 95% CI [−1.000, 0.000]` — **not evidence
+of anything**; one case flipping moves it 33 points. The panel's loss was a
+traceable rank inversion that led to D-051.
 
-**This is not evidence of anything.** One case flipping moves the point estimate
-by 33 points, and the interval spans nearly the whole range.
+**Ten cases** (`dev-single_doctor-befc79ba`, DeepSeek): strict accuracy **9/10**
+(95% CI 0.60–0.98), lenient 10/10 — the one strict miss, "Epidermoid
+(pilar/sebaceous) cyst", is a judgment call that a reader of the headline noun
+would grade exact. 34 actions (3.4 per case), no turn caps, **11 examinations**,
+3 refused requests and 2 re-delivered records, every one truthful. $0.114.
 
-What *is* worth recording is the mechanism, because it is traceable. Both arms
-score **top-3 = 3/3** — the panel did not lose `medqa-0012`, it **demoted** it.
-That diagnosis of the failure led to `D-051`.
+The DeepSeek run changed **two things at once** — the model and the fixes — so
+it cannot say which one removed the repeats. The repeat guard never fired in
+it; the guard's evidence is its replay on the recorded ling transcripts (12 of
+32 actions blocked, every one a genuine repeat).
 
 **Three standing caveats on every number above:**
 
 1. The verdicts were **assigned by hand** and are not reproducible.
 2. Everything is **dev-set**, tuned and measured on the same cases.
-3. n=3.
+3. n=3 — and medqa-0002's MRI result names its diagnosis.

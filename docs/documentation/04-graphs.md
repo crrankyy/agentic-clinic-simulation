@@ -46,11 +46,16 @@ class Event(BaseModel):
     turn: int
     kind: EventKind          # objective, question, answer, exam, test, literature,
                              # hypothesis, challenge, cost_objection, red_flag,
-                             # unlisted_test, parse_failure, budget, stop
+                             # unlisted_test, parse_failure, budget, stop,
+                             # guard, provider_error
     actor: Actor             # doctor, patient, gatekeeper, evidence, system
     text: str
     meta: dict[str, str]
 ```
+
+The first six kinds are `EVIDENCE_KINDS` — the only ones the hypothesis node
+reads (D-058). `guard` is a proposal the repeat guard rejected before it ran;
+`provider_error` is a provider still failing after every retry.
 
 **Kind and actor are independent, and that matters for rendering.** The
 challenger and cost steward emit with `actor="doctor"` because they are
@@ -121,43 +126,65 @@ effect, which looks like a model failure and is not.
 ## Stop conditions
 
 ```python
-StopReason = Literal["finalize", "turn_cap", "spend_cap",
-                     "request_cap", "budget_exhausted", "parse_failure"]
+StopReason = Literal["finalize", "turn_cap", "spend_cap", "request_cap",
+                     "budget_exhausted", "parse_failure",
+                     "provider_error", "no_new_actions"]
 ```
 
-| Reason | Trigger |
-|---|---|
-| `finalize` | the doctor chose to |
-| `turn_cap` | `max_turns` reached |
-| `spend_cap` | per-case USD cap |
-| `request_cap` | daily allowance |
-| `budget_exhausted` | a guard fired mid-node |
-| `parse_failure` | structured output unrecoverable |
+| Reason | Trigger | Outcome |
+|---|---|---|
+| `finalize` | the doctor chose to | scored |
+| `turn_cap` | `max_turns` reached | scored |
+| `no_new_actions` | every proposal in one decision repeated an earlier action (D-056) | scored |
+| `spend_cap` | per-case USD cap | error |
+| `request_cap` | daily allowance (free tier only) | error |
+| `budget_exhausted` | a guard fired mid-node | error |
+| `parse_failure` | structured output unrecoverable | error |
+| `provider_error` | provider still failing after every retry (D-059) | error |
 
-Everything except `finalize` is a **forced** stop, and the runner maps
-`budget_exhausted`, `request_cap` and `parse_failure` to outcome `error` — they
-are harness properties, not clinical judgements, and counting them as wrong
-answers would blame the doctor for a rate limit.
+Everything except `finalize` is a **forced** stop. The runner maps the harness
+stops to outcome `error` — they are properties of the harness or the day, not
+clinical judgements, and counting them as wrong answers would blame the doctor
+for a rate limit. `no_new_actions` is a clinical stop: the output was well-formed
+and the doctor simply had nothing new to do.
+
+A stop set *inside* a deliberation (`parse_failure`, `provider_error`,
+`no_new_actions`) routes straight to `finalize`. On the panel it used to detour
+through `challenger_final`, calling a model for an opinion nothing could act on.
+
+### The last result is read before a turn-cap finalize — M-07
+
+On a turn cap `check_stop` used to go straight to `finalize`, so the final
+answer was built from a summary that predated the last result. `route_stop`
+now returns `"absorb"` on a cap (not after a budget breach), sending the
+encounter through a `hypothesis_final` node first. The interactive graph keeps
+the old two-way routing.
 
 > There is deliberately **no confidence-threshold stop rule** (`Q-26`). It would
 > truncate exactly the high-confidence cases the calibration analysis needs.
 
 ## `budget_guarded` — `graphs/guarding.py`
 
-Every LLM-calling node wears it. **All of them**, not just the likely ones.
+Every LLM-calling node wears it. **All of them**, not just the likely ones. It
+turns three failures into a clean forced finalize instead of an exception:
 
-A breach first seen inside `ask_patient`, the gatekeeper's LLM tier or
-`finalize` would escape the graph as an exception, the runner would record
-`crash`, and the case would vanish from the accuracy denominator. The live
-trigger is `DailyCapExceeded`, which fires on *every* subsequent call once the
-allowance is gone — so a single late breach would silently shrink the
-denominator for every case after it.
+| Failure | stop_reason |
+|---|---|
+| `BudgetExceeded` — spend, request or daily cap | `budget_exhausted` / `request_cap` |
+| `ProviderUnavailable` — still failing after every retry (D-059) | `provider_error` |
+| `StructuredOutputFailed` — repair budget spent | `parse_failure` |
 
-> This was a Phase 3 review blocker: the decorator covered **2 of 8** LLM nodes.
+Before D-059 only the first was handled outside the orchestrator: a provider
+failure in `hypothesis` or `ask_patient` escaped as an exception and the case
+was recorded as a crash — c79bb4e6 died at turn 6 with the answer in hand.
+Auth and config failures are deliberately **not** caught: they are run-fatal,
+and the runner aborts the evaluation on them rather than crashing each case.
 
-`channel` is a required argument, not defaulted. A node inside the decision
-subgraph cannot write `encounter_log`, and a default would make that the easy
-mistake for the sub-role nodes.
+`on_content_failure=False` is for the advisory sub-roles, which degrade to "no
+opinion" (D-049) instead of ending the encounter. `channel` is a required
+argument: a node inside the decision subgraph cannot write `encounter_log`.
+
+> A Phase 3 review blocker: the decorator once covered **2 of 8** LLM nodes.
 
 ## Recursion limits
 

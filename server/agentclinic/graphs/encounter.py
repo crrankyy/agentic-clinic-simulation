@@ -52,10 +52,15 @@ def build_encounter_graph(
     evidence: Any = None,
     checkpointer: Any = None,
     config_dir: Any = None,
+    question_overlap: float | None = None,
 ) -> Any:
     """Compile the panel encounter graph for one case."""
     hypothesis = make_hypothesis_node(caller, case_id, config_dir)
-    orchestrator = make_orchestrator_node(caller, case_id, decision_model, max_turns, config_dir)
+    orchestrator = make_orchestrator_node(
+        caller, case_id, decision_model, max_turns, config_dir,
+        enabled=enabled, resolve=getattr(gatekeeper, "resolve_deterministic", None),
+        **({"question_overlap": question_overlap} if question_overlap is not None else {}),
+    )
     challenger = make_challenger_node(caller, case_id, channel="panel_events",
                                       config_dir=config_dir)
     cost_steward = make_cost_steward_node(caller, case_id, costs, config_dir)
@@ -68,6 +73,7 @@ def build_encounter_graph(
     graph = StateGraph(EncounterState)
     graph.add_node("brief", lambda state: {})
     graph.add_node("hypothesis", hypothesis)
+    graph.add_node("hypothesis_final", make_hypothesis_node(caller, case_id, config_dir))
     graph.add_node("panel", panel)
     graph.add_node("absorb_panel", absorb_panel)
     graph.add_node("challenger_final", challenger_final)
@@ -95,8 +101,10 @@ def build_encounter_graph(
     for action in enabled:
         graph.add_edge(action, "check_stop")
     graph.add_conditional_edges(
-        "check_stop", route_stop, {"continue": "hypothesis", "stop": "finalize"}
+        "check_stop", lambda s: route_stop(s, absorb_on_cap=True),
+        {"continue": "hypothesis", "stop": "finalize", "absorb": "hypothesis_final"},
     )
+    graph.add_edge("hypothesis_final", "finalize")
     graph.add_edge("finalize", END)
 
     return graph.compile(checkpointer=checkpointer)

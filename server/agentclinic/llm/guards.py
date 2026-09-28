@@ -85,8 +85,11 @@ class DailyRequestCounter:
     resumed the next morning correctly sees a fresh allowance.
     """
 
-    def __init__(self, path: Path, limit: int = 1000) -> None:
+    def __init__(self, path: Path, limit: int | None = 1000) -> None:
         self.path = path
+        #: None means no daily cap. The 1000/day allowance is a property of
+        #: OpenRouter's `:free` tier (D-023); a paid model has no such cap, and
+        #: applying it anyway throttled paid runs by free-tier history (D-062).
         self.limit = limit
 
     @staticmethod
@@ -104,7 +107,9 @@ class DailyRequestCounter:
     def used(self) -> int:
         return int(self._read().get(self._today(), 0))
 
-    def remaining(self) -> int:
+    def remaining(self) -> int | None:
+        if self.limit is None:
+            return None
         return max(0, self.limit - self.used())
 
     def record(self, n: int = 1) -> None:
@@ -118,7 +123,8 @@ class DailyRequestCounter:
         self.path.write_text(json.dumps(data, sort_keys=True, indent=2), encoding="utf-8")
 
     def check(self) -> None:
-        if self.remaining() <= 0:
+        remaining = self.remaining()
+        if remaining is not None and remaining <= 0:
             raise DailyCapExceeded(
                 f"daily request allowance of {self.limit} is exhausted "
                 f"({self.used()} used today). The cap resets at 00:00 UTC."
@@ -159,9 +165,18 @@ class RunGuards:
     bucket: TokenBucket
     daily: DailyRequestCounter
     spend: SpendTracker
+    #: Monotonic time before which no call may start. A 429 is per account, so
+    #: when one worker is told to wait, every worker should (M-13).
+    cool_until: float = 0.0
+
+    def cooldown(self, seconds: float) -> None:
+        self.cool_until = max(self.cool_until, time.monotonic() + max(0.0, seconds))
 
     async def before_call(self, case_id: str) -> None:
         self.spend.check(case_id)
         self.daily.check()
+        wait = self.cool_until - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
         await self.bucket.acquire()
         self.daily.record()

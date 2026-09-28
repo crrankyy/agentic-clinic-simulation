@@ -6,6 +6,7 @@ simulation must never be mistaken for a clinical tool.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -111,7 +112,7 @@ def play(
         raise typer.Exit(1)
 
     class StubPatient:
-        async def answer(self, question: str, *, case_id: str) -> PatientReply:
+        async def answer(self, question: str, *, case_id: str, history=()) -> PatientReply:
             return PatientReply(
                 reply="(stub patient: run without --stub-patient for real answers)",
                 unknown=True,
@@ -120,25 +121,10 @@ def play(
     if stub_patient:
         patient: Any = StubPatient()
     else:
-        from .llm.openrouter import (
-        LLMCaller,
-        MissingCredentials,
-        UsageRecorder,
-        build_chat_model,
-    )
+        from .llm.factory import build_caller
 
-        models = load_models()
-        recorder = UsageRecorder()
-        model = build_chat_model(
-            model=models.for_role("patient"),
-            pin_provider=models.provider.pin,
-            allow_fallbacks=models.provider.allow_fallbacks,
-            attribution_title=models.provider.attribution_title,
-        )
         patient = Patient(store.patient_view(case_id),
-                          LLMCaller(model, recorder=recorder,
-                                    structured_method=models.structured_output_method,
-                       call_timeout=budgets.timeout_seconds))
+                          build_caller(load_models(), budgets, guards=None))
 
     graph = build_interactive_graph(
         patient=patient,
@@ -209,13 +195,7 @@ def run(
     from .graphs.schemas import make_orchestrator_decision
     from .graphs.encounter import build_encounter_graph
     from .graphs.single_doctor import build_single_doctor_graph
-    from .llm.guards import DailyRequestCounter, RunGuards, SpendTracker, TokenBucket
-    from .llm.openrouter import (
-        LLMCaller,
-        MissingCredentials,
-        UsageRecorder,
-        build_chat_model,
-    )
+    from .llm.openrouter import MissingCredentials
     from .tracing import Tracer
 
     # Q-34: the cache is hard-disabled for any run that writes a report. This is
@@ -249,55 +229,54 @@ def run(
     run_id = f"{split}-{config}-{uuid.uuid4().hex[:8]}"
     run_dir = ROOT / "runs" / run_id
     tracer = Tracer(run_dir=run_dir)
+    from .eval.runmeta import write_run_meta
 
-    guards = RunGuards(
-        bucket=TokenBucket(rate_per_minute=budgets.rate_per_minute,
-                           capacity=budgets.rate_per_minute),
-        daily=DailyRequestCounter(ROOT / "runs" / ".daily.json", limit=budgets.requests_per_day),
-        spend=SpendTracker(per_case_cap=budgets.spend_per_case_usd,
-                           per_run_cap=budgets.spend_per_run_usd),
-    )
+    write_run_meta(run_dir, config=config, models=models, split=split,
+                   max_turns=max_turns, cases=[c.case_id for c in selected])
+
+    from .llm.factory import build_caller, build_guards, projected_requests
+    from .llm.preflight import preflight
+
+    # M-17: a revoked key or an unserved model is found here, for free, rather
+    # than by the first case -- which used to report it as a schema failure.
+    if not (cache and no_report):
+        check = asyncio.run(preflight(models, routing=True))
+        if not check.ok:
+            console.print(f"[red]refusing to start: {check.reason}[/red]")
+            raise typer.Exit(2)
+        if check.key_limit_remaining is not None:
+            console.print(f"key spend remaining: ${check.key_limit_remaining:.2f}")
+
+    guards = build_guards(models, budgets, ROOT / "runs" / ".daily.json")
     remaining = guards.daily.remaining()
-    # Pre-flight. ~3 calls per turn (hypothesis, orchestrator, patient/gatekeeper)
-    # plus a finalize. Refusing up front is far better than discovering the cap
+    # Pre-flight. Refusing up front is far better than discovering the cap
     # mid-run, where a daily-cap 429 turns every remaining case into an `error`
-    # and silently shrinks the accuracy denominator.
-    # Worst case, measured on a scripted model: single_doctor 41 calls at 20
-    # turns; panel 127 when every turn orders a test AND is re-deliberated. An
-    # under-projection defeats the guard entirely, so this projects the worst
-    # case rather than the typical one.
-    per_turn = 7 if config == "panel" else 3
-    projected = len(selected) * (max_turns * per_turn + 3)
-    console.print(f"daily requests remaining: {remaining}  projected: ~{projected}")
-    if projected > remaining:
-        console.print(
-            f"[red]refusing to start: this run needs roughly {projected} requests but "
-            f"only {remaining} remain in today's allowance.[/red]\n"
-            "[dim]reduce --limit or --max-turns, or wait for the 00:00 UTC reset[/dim]"
-        )
-        raise typer.Exit(2)
+    # and silently shrinks the accuracy denominator. Worst case, measured on a
+    # scripted model: single_doctor 41 calls at 20 turns; panel 127 when every
+    # turn orders a test AND is re-deliberated. Free tier only (D-062).
+    projected = len(selected) * projected_requests(config, max_turns)
+    if remaining is not None:
+        console.print(f"daily requests remaining: {remaining}  projected: ~{projected}")
+        if projected > remaining:
+            console.print(
+                f"[red]refusing to start: this run needs roughly {projected} requests but "
+                f"only {remaining} remain in today's allowance.[/red]\n"
+                "[dim]reduce --limit or --max-turns, or wait for the 00:00 UTC reset[/dim]"
+            )
+            raise typer.Exit(2)
+    else:
+        console.print(f"paid model: no request allowance; spend capped at "
+                      f"${budgets.spend_per_case_usd}/case, ${budgets.spend_per_run_usd}/run")
 
     enabled = frozenset({"ask_patient", "request_exam", "order_test"})
     decision_model = make_orchestrator_decision(enabled)
-    recorder = UsageRecorder()
     try:
-        chat = build_chat_model(
-            model=models.for_role("orchestrator"),
-            pin_provider=None if (cache and no_report) else models.provider.pin,
-            allow_fallbacks=models.provider.allow_fallbacks,
-            attribution_title=models.provider.attribution_title,
-            timeout=budgets.timeout_seconds,
-            # 0: LLMCaller owns retries. SDK-internal retries would multiply
-            # the wall-clock deadline by (max_retries + 1) invisibly.
-            max_retries=0,
-        )  # callbacks are attached per invocation by LLMCaller
+        caller = build_caller(models, budgets, guards=guards, tracer=tracer,
+                              unpinned=bool(cache and no_report))
     except MissingCredentials as exc:
         console.print(f"[red]{exc}[/red]")
         console.print("[dim]export OPENROUTER_API_KEY=... and try again[/dim]")
         raise typer.Exit(1) from None
-    caller = LLMCaller(chat, guards=guards, recorder=recorder, tracer=tracer,
-                       structured_method=models.structured_output_method,
-                       call_timeout=budgets.timeout_seconds)
     judge = Judge(model=models.judge.model,
                   max_calls_per_run=models.judge.max_calls_per_run, tracer=tracer,
                   require_subscription=models.judge.auth == "subscription")
@@ -314,6 +293,7 @@ def run(
             ),
             case_id=case_id, decision_model=decision_model, enabled=enabled,
             max_turns=budgets.max_turns, guards=guards,
+            question_overlap=budgets.question_repeat_overlap,
         )
         if config == "panel":
             return build_encounter_graph(costs=costs, **shared)
@@ -419,31 +399,17 @@ def judge(
             return value
         return str(value or "").strip().lower() in {"true", "1", "yes"}
 
+    from .eval.runner import result_from_row
+
     async def main() -> list[CaseResult]:
         out: list[CaseResult] = []
         for row in rows:
-            r = CaseResult(case_id=row["case_id"], outcome=row["outcome"])
-            for key, cast in (("stop_reason", str), ("diagnosis", str), ("match_tiers", str)):
-                setattr(r, key, cast(row.get(key) or ""))
-            for key in ("turns", "patient_questions", "tests_ordered", "exams_requested",
-                        "unlisted_tests", "parse_failures"):
-                setattr(r, key, int(float(row.get(key) or 0)))
-            for key in ("test_cost_usd", "api_cost_usd", "final_confidence", "latency_s"):
-                setattr(r, key, float(row.get(key) or 0))
-            r.forced_stop = as_bool(row.get("forced_stop"))
-            r.dx_in_results = as_bool(row.get("dx_in_results"))
-            r.dx_tokens_in_results = as_bool(row.get("dx_tokens_in_results"))
-            r.abstained = as_bool(row.get("abstained"))
-            # Absent from CSVs written before D-051; those runs were measured
-            # live, so a missing column means True, not False.
-            if "behaviour_recovered" in row:
-                r.behaviour_recovered = as_bool(row["behaviour_recovered"])
-            tiers = row.get("match_tiers") or ""
-            if isinstance(tiers, dict):
-                r.match_tiers = {k: int(v) for k, v in tiers.items()}
-            else:
-                r.match_tiers = {k: int(v) for k, v in
-                                 (p.split("=") for p in tiers.split(";") if "=" in p)}
+            # Every field, coerced by its declared type (result_from_row).
+            r = result_from_row(row)
+            if "behaviour_recovered" not in row:
+                # Absent from CSVs written before D-051; those runs were
+                # measured live, so a missing column means True.
+                r.behaviour_recovered = True
 
             answer = finals.get(r.case_id)
             if answer is None or r.abstained:
@@ -536,6 +502,72 @@ def trace(run_id: str, case_id: str) -> None:
         t.add_row(r["ts"][11:23], r["kind"], str(r.get("node", "")), str(detail)[:70],
                   tok, cost, str(r.get("latency_s", "")))
     console.print(t)
+
+
+@app.command()
+def probe(
+    providers: str = typer.Option("", help="comma-separated providers to try; "
+                                           "default: the configured pin"),
+    calls: int = typer.Option(2, help="calls per schema per provider"),
+) -> None:
+    """Check the configured model on the REAL nested schemas, per provider.
+
+    Lesson from nemotron (PHASE_3_NOTES 7.1): a flat schema can pass while the
+    nested HypothesisUpdate fails 0/2, so a model is only usable once it has
+    produced the schemas this pipeline actually asks for. Costs a few calls.
+    """
+    import time
+
+    from .config import load_budgets, load_dotenv, load_models
+    from .graphs.schemas import HypothesisUpdate, make_orchestrator_decision
+    from .llm.factory import build_caller
+    from .llm.preflight import preflight
+
+    load_dotenv()
+    models = load_models()
+    budgets = load_budgets()
+    check = asyncio.run(preflight(models))
+    console.print(f"preflight: {'ok' if check.ok else 'FAILED'} -- {check.reason}")
+    if check.key_limit_remaining is not None:
+        console.print(f"key spend remaining: ${check.key_limit_remaining:.2f}")
+    if not check.ok and "rejected the API key" in check.reason:
+        raise typer.Exit(2)
+
+    candidates = [p.strip() for p in providers.split(",") if p.strip()] or list(models.provider.pin)
+    prompt = (
+        "You are a physician maintaining a working differential.\n\n## Referral\n"
+        "Evaluate and diagnose the patient presenting with gait and limb ataxia.\n\n"
+        "## What has happened so far\n"
+        "[turn 1] doctor: Tell me about your medical history and medications.\n"
+        "[turn 1] patient: I have Crohn disease and have been on natalizumab for a year.\n"
+        "[turn 2] doctor: MRI brain with contrast\n"
+        "[turn 2] gatekeeper: MRI Brain: multifocal demyelinating lesions without "
+        "enhancement.\n\nReturn your updated differential and a short summary."
+    )
+    decision = make_orchestrator_decision(frozenset({"ask_patient", "order_test"}))
+    for provider in candidates:
+        caller = build_caller(models, budgets, guards=None, pin_override=[provider])
+        console.print(f"\n[bold]{models.for_role('orchestrator')} @ {provider}[/bold]")
+        for label, schema, node, extra in (
+            ("HypothesisUpdate (nested)", HypothesisUpdate, "hypothesis", ""),
+            ("OrchestratorDecision", decision, "orchestrator",
+             "\n\nNow choose exactly one next action."),
+        ):
+            for i in range(calls):
+                t0 = time.monotonic()
+                try:
+                    out = asyncio.run(caller.structured(schema, prompt + extra,
+                                                        case_id="probe", node=node))
+                    detail = (f"differential={len(out.differential)} "
+                              f"top={out.differential[0].diagnosis!r}"
+                              if hasattr(out, "differential") and out.differential
+                              else f"action={getattr(out, 'action', '?')}")
+                    console.print(f"  {label} #{i + 1}: [green]OK[/green] "
+                                  f"{time.monotonic() - t0:.1f}s  {detail}")
+                except Exception as exc:  # noqa: BLE001 — reported, not raised
+                    console.print(f"  {label} #{i + 1}: [red]FAIL[/red] "
+                                  f"{time.monotonic() - t0:.1f}s  {type(exc).__name__}: "
+                                  f"{str(exc)[:160]}")
 
 
 @app.command()

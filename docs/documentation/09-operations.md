@@ -6,7 +6,7 @@
 uv sync                                                    # Python 3.12, pinned
 uv run python server/scripts/download_dataset.py           # fetch + verify cases
 cp .env.example .env                                       # then fill in
-uv run pytest                                              # 223 tests, offline
+uv run pytest                                              # 266 tests, offline
 ```
 
 Python is pinned to **3.12**: the system 3.14 is ahead of much of the
@@ -38,6 +38,7 @@ uv run python -m agentclinic.cli play             # drive the doctor yourself
 uv run python -m agentclinic.cli run              # evaluate (single_doctor)
 uv run python -m agentclinic.cli run --config panel
 uv run python -m agentclinic.cli judge <run_id>   # re-judge without re-running
+uv run python -m agentclinic.cli probe --providers "Together,DeepInfra"   # test a model on the real schemas
 uv run python -m agentclinic.cli trace <run_id> <case_id>
 uv run python -m agentclinic.cli serve            # the web viewer
 ```
@@ -63,21 +64,34 @@ Model IDs live in `server/config/models.yaml`, **never in code**.
 
 ```yaml
 provider:
-  pin: ["Novita"]
+  pin: ["Together"]                 # chosen by `cli probe` (D-061)
   allow_fallbacks: false
+  require_parameters: false
 structured_output:
   method: function_calling
 roles:
-  orchestrator: inclusionai/ling-3.0-flash-vl:free
-  # …every role uses the same model (D-020)
+  orchestrator: deepseek/deepseek-v4.1-flash
+  # …every role uses the same model
+role_settings:                      # per-role output and thinking limits
+  default:    {max_tokens: 4000, reasoning: {effort: medium, exclude: true}}
+  hypothesis: {max_tokens: 8000, reasoning: {effort: medium, exclude: true}}
+  patient:    {max_tokens: 1500, reasoning: {effort: low, exclude: true}}
+  gatekeeper: {max_tokens: 800,  reasoning: {effort: low, exclude: true}}
 judge:
   sdk: anthropic
   model: claude-opus-5
   auth: subscription
 ```
 
-**One model for every role** (`D-020`). Besides cost, this removes any
-role/model confound from the panel-vs-single comparison.
+**One model for every role** (`D-020`'s surviving half; its `:free` half was
+superseded by D-061 at the user's direction). This removes any role/model
+confound from the panel-vs-single comparison.
+
+**Changing the model or provider?** Run `cli probe` first. It sends the real
+nested schemas to each provider you name and reports pass/fail and latency.
+A flat-schema check once passed a model that then scored 0/2 on the real one,
+and the endpoint listing cannot see your account's guardrails — first-party
+DeepSeek looked available and was refused on every call.
 
 `judge.auth: subscription` **refuses to run** if `ANTHROPIC_API_KEY` or
 `ANTHROPIC_AUTH_TOKEN` is set, because the SDK would silently prefer either over
@@ -98,16 +112,22 @@ spend:
   per_case_usd: 0.50
   per_run_usd: 25.0
 requests:
-  rate_per_minute: 18        # under the 20/min account cap
-  per_day: 1000
+  rate_per_minute: 18        # free tier only (D-062)
+  per_day: 1000              # free tier only
+  paid_rate_per_minute: 60
   concurrency: 4
 retries:
-  attempts: 3
-  backoff_seconds: [1, 2, 4]
+  content_attempts: 3        # repair prompts, for output that did not validate
+  transient_attempts: 5      # 429 / 5xx / connection / empty: back off, resend unchanged
+  timeout_retries: 2
+  backoff_base_s: 2          # 2, 4, 8, 16, 32 s with ±20% jitter; Retry-After wins
+  backoff_cap_s: 60
   timeout_seconds: 120
+guard:
+  question_repeat_overlap: 0.6667
 ```
 
-Retried: 429, 500, 502, 503, 504, connect/read timeouts. **Not** other 4xx.
+Never retried: 401/402/403 and 400/404/422. Both are run-fatal.
 
 ### Test prices — `server/config/test_costs.yaml`
 
@@ -122,22 +142,23 @@ for the dataset's key naming.
 
 ## What a run costs
 
-Measured, not estimated:
+**DeepSeek v4.1 Flash on Together** (the current configuration), measured on
+the 2026-09-27 sim: **$0.027 for three single-doctor cases**, 2–4 actions each,
+24–33 s of model time per case, no provider failures. The key's remaining
+spend limit is printed before a run and shown in the viewer.
+
+**The free model** (earlier runs), measured:
 
 | | calls/case | time/case | dev (40) | full (214) |
 |---|---|---|---|---|
 | `single_doctor` | ~41 | ~4 min | 1,630 | 8,800 |
 | `panel` | ~77 | ~9 min | 3,090 | 16,500 |
 
-Against a **1000 requests/day** free-tier cap, both arms on the dev split is
-about **five days**; both on all 214 is about **25**.
+Against the **1000 requests/day** free-tier cap, both arms on the dev split was
+about five days. That cap does not apply to a paid model.
 
-The free model delivers **4.7–8.5 req/min** against an 18/min bucket — **the
-model is the bottleneck, not the limiter**, so raising concurrency does not help.
-The daily cap is what binds at scale.
-
-`cli run` refuses to start if the projected worst case exceeds the remaining
-allowance, and so does `POST /api/runs`.
+`cli run` refuses to start if the preflight fails or, on the free tier, if the
+projected worst case exceeds the remaining allowance; so does `POST /api/runs`.
 
 ## Run artefacts
 
@@ -146,7 +167,7 @@ runs/<run_id>/
 ├── traces/<case_id>.jsonl   # every LLM call and every event
 ├── judge.jsonl              # judge records — never in a per-case trace
 ├── finals.json              # the answers: makes re-judging cheap
-├── summary.json             # stop_reason (web runs)
+├── summary.json             # status, stop_reason, error_class (web runs, every exit)
 ├── results.csv              # per-case results
 └── report.md                # the rendered report
 ```
@@ -159,12 +180,17 @@ runs/<run_id>/
 |---|---|
 | Every case is `error` with `request_cap` | Daily allowance gone. Resets at **00:00 UTC**, not local midnight |
 | A run hangs for many minutes | httpx timeouts are **per-operation**; `asyncio.wait_for` bounds it, but check `runs/<id>/traces/` for the last record |
-| `usage.cost` is always 0 | Expected on free models |
 | `results.csv` missing after a crash | `cli judge <run_id>` rebuilds from `finals.json` + traces (`D-050`) |
 | Report says `n/a (not recorded)` | A rebuilt run recorded before **D-054**; its transcript was never persisted |
 | Tests skip en masse | Dataset not downloaded — `test_paths.py` says which anchor failed |
 | Judge refuses to start | `auth: subscription` with an API key set (`D-046`) |
-| Web run 429s on start | Pre-flight projection exceeds the remaining allowance |
+| Web run 429s on start | Pre-flight projection exceeds the remaining allowance (free tier) |
+| Web run 503s on start / Start disabled | The preflight failed; the page shows why (revoked key, exhausted spend limit, provider refused) |
+| `ProviderAuthError` | 401/402/403 — the key is revoked, or its spend limit is exhausted. The run aborts |
+| `ProviderConfigError` / "No endpoints found" | 400/404 — model, provider or parameter not served, or refused by an account guardrail. Run `cli probe` |
+| Cases end with `provider_error` | The provider kept failing after every retry; outcome `error`, excluded from accuracy |
+| A case ends with `no_new_actions` | Every proposal in one decision repeated an earlier action; a clinical stop, scored |
+| `usage.cost` is always 0 | Expected on free models; real on paid ones |
 
 ## Project status
 

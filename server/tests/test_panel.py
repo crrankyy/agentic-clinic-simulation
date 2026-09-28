@@ -246,7 +246,9 @@ async def test_a_cap_forced_finalize_skips_the_challenger(cases):
     is reachable there regardless of the code under test. This is a **regression
     guard against re-adding `challenger_stop`**, not a property of the router.
     """
-    script = [HYP, decide("ask_patient", "q1"), HYP, decide("ask_patient", "q2"), FINAL]
+    # The HYP before FINAL is the hypothesis pass that now reads the last
+    # result before a turn-cap finalize (M-07).
+    script = [HYP, decide("ask_patient", "q1"), HYP, decide("ask_patient", "q2"), HYP, FINAL]
     graph, _, store = build_panel(cases, script, max_turns=2)
     out = await run(graph, store)
     assert out["stop_reason"] == "turn_cap"

@@ -17,7 +17,7 @@ class ScriptedPatient:
     def __init__(self) -> None:
         self.asked: list[str] = []
 
-    async def answer(self, question: str, *, case_id: str) -> PatientReply:
+    async def answer(self, question: str, *, case_id: str, history=()) -> PatientReply:
         self.asked.append(question)
         return PatientReply(reply=f"answer to {question}", unknown=False)
 

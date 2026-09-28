@@ -21,7 +21,7 @@ than by asking a model nicely.
 | 5 | [LLM layer](05-llm-layer.md) | OpenRouter, structured output, guards, tracing |
 | 6 | [Evaluation](06-evaluation.md) | Runner, metrics, report, judging separately |
 | 7 | [Web app](07-web-app.md) | FastAPI, SSE streaming, replay, the client |
-| 8 | [Testing](08-testing.md) | What the 223 tests cover and why each exists |
+| 8 | [Testing](08-testing.md) | What the 266 tests cover and why each exists |
 | 9 | [Operations](09-operations.md) | Running it, configuration, costs, troubleshooting |
 
 ## Orientation in one screen
@@ -66,7 +66,7 @@ Filesystem anchors live in `server/agentclinic/paths.py` and nowhere else.
 Most modules open with a docstring explaining *why* the code is shaped as it is,
 usually naming the decision (`D-0NN`) or the question (`Q-NN`) behind it. Those
 identifiers resolve in [`docs/DECISIONS.md`](../DECISIONS.md), which is the
-authoritative record — 55 entries, each with the options considered and the
+authoritative record — 62 entries, each with the options considered and the
 reason for the choice.
 
 Several of those docstrings describe bugs that actually happened. They are kept

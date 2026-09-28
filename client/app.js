@@ -32,6 +32,23 @@ const PARTY = {
   parse_failure:  { cls: 'alert',      who: 'Parse failure' },
   budget:         { cls: 'system',     who: 'Budget' },
   stop:           { cls: 'system',     who: 'Encounter ended' },
+  // D-056: an action the repeat guard rejected before it ran. No turn was spent.
+  guard:          { cls: 'guard',      who: 'Repeat blocked', tag: 'no turn used' },
+  provider_error: { cls: 'alert',      who: 'Provider error' },
+};
+
+/* Plain-language failure messages, by what actually happened. A revoked key
+ * used to read as "HypothesisUpdate did not validate after 3 attempts". */
+const FAILURE = {
+  auth:         'OpenRouter rejected the API key — replace it, or raise its spend limit.',
+  config:       'OpenRouter could not serve this model/provider/parameter combination.',
+  rate_limited: 'The provider kept rate-limiting after every retry.',
+  server_error: 'The provider kept returning server errors after every retry.',
+  timeout:      'The provider kept timing out after every retry.',
+  connection:   'Could not connect to the provider.',
+  empty:        'The provider kept returning empty responses.',
+  budget:       'A spend or request cap was reached.',
+  deadline:     'The encounter hit its wall-clock deadline.',
 };
 
 /* A doctor-side event with actor "doctor" is the doctor *acting*; the same kind
@@ -85,6 +102,7 @@ function render(ev) {
 
   const bits = [];
   if (p.tag) bits.push(p.tag);
+  if (ev.kind === 'guard' && ev.meta && ev.meta.action) bits.push(ev.meta.action);
   if (ev.meta && ev.meta.tier) bits.push('matched: ' + ev.meta.tier);
   if (ev.meta && ev.meta.unknown === 'True') bits.push("doesn't know");
   if (bits.length) {
@@ -107,7 +125,8 @@ function openStream(url, meta) {
   if (source) source.close();
   clearTranscript();
   current = meta;
-  setStatus(meta.source === 'replay' ? 'Replaying…' : 'Running…', 'running');
+  const who = meta.model ? ` · ${shortModel(meta.model)}` : '';
+  setStatus((meta.source === 'replay' ? 'Replaying…' : 'Running…') + who, 'running');
   $('start').disabled = true;
   $('replay').disabled = true;
 
@@ -118,12 +137,16 @@ function openStream(url, meta) {
     source.close(); source = null;
     $('start').disabled = false;
     $('replay').disabled = false;
-    if (s.status === 'failed') {
-      setStatus('Failed — ' + (s.error || 'unknown'), 'failed');
+    if (s.status === 'failed' || s.status === 'incomplete') {
+      const why = FAILURE[s.error_class] || s.error || 'the run did not complete';
+      setStatus((s.status === 'failed' ? 'Failed — ' : 'Incomplete — ') + why, 'failed');
+      refreshRuns();
       return;
     }
-    setStatus(s.stop_reason && s.stop_reason !== 'finalize'
-      ? 'Ended (' + s.stop_reason + ')' : 'Finished', 'finished');
+    const model = s.model || (current && current.model);
+    const tail = model ? ` · ${shortModel(model)}` : '';
+    setStatus((s.stop_reason && s.stop_reason !== 'finalize'
+      ? 'Ended (' + s.stop_reason + ')' : 'Finished') + tail, 'finished');
     if (s.final) renderFinal(s.final);
     $('revealPanel').hidden = false;
     refreshRuns();
@@ -180,39 +203,119 @@ function renderFinal(final) {
 
 /* --- wiring --- */
 
+let lastMeta = null;
+
 function refreshQuota() {
   return api('/api/meta').then((m) => {
-    $('quota').textContent =
-      `${m.model} · ${m.daily_remaining}/${m.daily_limit} requests left today`;
+    lastMeta = m;
+    const cred = m.credential || { ok: true };
+    let quota;
+    if (m.tier === 'free') {
+      quota = `${m.model} · ${m.daily_remaining}/${m.daily_limit} requests left today`;
+    } else {
+      const left = cred.key_limit_remaining;
+      quota = `${m.model} · paid · cap $${m.spend_cap_per_case_usd}/case` +
+        (left !== null && left !== undefined ? ` · $${Number(left).toFixed(2)} left on key` : '');
+    }
+    $('quota').textContent = quota;
     $('disclaimer').textContent = m.disclaimer;
-    updateCostNote(m.daily_remaining);
+    updateCostNote();
   }).catch(() => {});
 }
 
-function updateCostNote(remaining) {
+function updateCostNote() {
+  const m = lastMeta || {};
+  const cred = m.credential || { ok: true };
   const cfg = $('config').value;
   const turns = Number($('turns').value) || 20;
   const projected = turns * (cfg === 'panel' ? 7 : 3) + 3;
-  const note = `worst case ~${projected} requests` +
-    (remaining !== undefined && projected > remaining ? ' — over today\'s allowance' : '');
+  const remaining = m.tier === 'free' ? m.daily_remaining : null;
+  let note = `worst case ~${projected} requests`;
+  let blocked = false;
+  if (remaining !== null && remaining !== undefined && projected > remaining) {
+    note += ' — over today\'s allowance';
+    blocked = true;
+  }
+  // M-17: say why Start is off, instead of letting the run fail 1 s in.
+  if (cred.ok === false) {
+    note = 'Cannot start: ' + cred.reason;
+    blocked = true;
+  }
   $('costNote').textContent = note;
-  $('start').disabled = remaining !== undefined && projected > remaining;
+  $('start').disabled = blocked;
+}
+
+function shortModel(m) {
+  if (!m) return 'model not recorded';
+  return m.split('/').pop();
+}
+
+let allRuns = [];
+
+function fmtStarted(iso) {
+  if (!iso) return 'time not recorded';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/* Runs arrive latest first from the server. The model list keeps that order,
+ * so the model you ran most recently is the default. */
+function modelsInOrder(rows) {
+  const seen = new Map();
+  rows.forEach((r) => {
+    const key = r.model || '';
+    if (!seen.has(key)) seen.set(key, new Set());
+    seen.get(key).add(r.run_id);
+  });
+  return [...seen.entries()].map(([model, runs]) => ({ model, runs: runs.size }));
+}
+
+function renderRunOptions() {
+  const model = $('modelFilter').value;
+  const sel = $('runs');
+  const keep = sel.value;
+  sel.innerHTML = '';
+  const rows = allRuns.filter((r) => (r.model || '') === model);
+  // One group per run, latest first; its cases inside, in case order.
+  const byRun = new Map();
+  rows.forEach((r) => {
+    if (!byRun.has(r.run_id)) byRun.set(r.run_id, []);
+    byRun.get(r.run_id).push(r);
+  });
+  byRun.forEach((cases, runId) => {
+    const first = cases[0];
+    const og = document.createElement('optgroup');
+    og.label = `${fmtStarted(first.started)} · ${first.config} · ` +
+      `${cases.length} case${cases.length === 1 ? '' : 's'} · ${runId}`;
+    cases.forEach((r) => {
+      const o = document.createElement('option');
+      o.value = JSON.stringify({ run_id: r.run_id, case_id: r.case_id, model: r.model || null });
+      const state = r.status === 'finished' ? (r.stop_reason || 'finished') : r.status;
+      o.textContent = `${r.case_id} · ${state} · ${r.events} events`;
+      og.appendChild(o);
+    });
+    sel.appendChild(og);
+  });
+  if (!byRun.size) sel.innerHTML = '<option value="">no runs for this model</option>';
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  $('replay').disabled = !byRun.size;
 }
 
 function refreshRuns() {
   return api('/api/runs').then((rows) => {
-    const sel = $('runs');
-    const keep = sel.value;
-    sel.innerHTML = '<option value="">—</option>';
-    rows.filter((r) => r.source === 'replay' || r.status === 'finished')
-        .forEach((r) => {
-          const o = document.createElement('option');
-          o.value = JSON.stringify({ run_id: r.run_id, case_id: r.case_id });
-          o.textContent = `${r.case_id} · ${r.config} · ${r.events} events · ${r.run_id}`;
-          sel.appendChild(o);
-        });
-    sel.value = keep;
-    $('replay').disabled = !sel.options.length;
+    allRuns = rows.filter((r) => r.source === 'replay' || r.status !== 'running');
+    const pick = $('modelFilter');
+    const keep = pick.value;
+    pick.innerHTML = '';
+    modelsInOrder(allRuns).forEach(({ model, runs }) => {
+      const o = document.createElement('option');
+      o.value = model;
+      o.textContent = `${shortModel(model || null)} — ${runs} run${runs === 1 ? '' : 's'}`;
+      pick.appendChild(o);
+    });
+    if ([...pick.options].some((o) => o.value === keep)) pick.value = keep;
+    renderRunOptions();
   }).catch(() => {});
 }
 
@@ -231,8 +334,9 @@ function init() {
     show();
   });
 
-  $('config').addEventListener('change', refreshQuota);
-  $('turns').addEventListener('input', refreshQuota);
+  $('modelFilter').addEventListener('change', renderRunOptions);
+  $('config').addEventListener('change', updateCostNote);
+  $('turns').addEventListener('input', updateCostNote);
 
   $('start').addEventListener('click', () => {
     api('/api/runs', {
@@ -252,9 +356,9 @@ function init() {
   $('replay').addEventListener('click', () => {
     const v = $('runs').value;
     if (!v) return;
-    const { run_id, case_id } = JSON.parse(v);
+    const { run_id, case_id, model } = JSON.parse(v);
     openStream(`/api/runs/${run_id}/stream?case_id=${encodeURIComponent(case_id)}`,
-      { run_id, case_id, source: 'replay' });
+      { run_id, case_id, source: 'replay', model });
   });
 
   $('revealBtn').addEventListener('click', () => {

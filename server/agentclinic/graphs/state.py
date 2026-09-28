@@ -28,12 +28,27 @@ EventKind = Literal[
     "objective", "question", "answer", "exam", "test", "literature",
     "hypothesis", "challenge", "cost_objection", "red_flag",
     "unlisted_test", "parse_failure", "budget", "stop",
+    # D-056: a proposed action the repeat guard rejected before it executed.
+    "guard",
+    # D-059: the provider stayed unavailable after the transient-retry budget.
+    "provider_error",
 ]
+
+#: The kinds that carry *evidence*: what was asked, examined, tested, read, and
+#: what came back. The hypothesis node sees only these (D-058). Everything else
+#: is the doctor's own earlier output or harness bookkeeping, and re-reading it
+#: as if it were evidence anchors the model on its own past guesses.
+EVIDENCE_KINDS = frozenset({"objective", "question", "answer", "exam", "test", "literature"})
 
 Actor = Literal["doctor", "patient", "gatekeeper", "evidence", "system"]
 
 StopReason = Literal["finalize", "turn_cap", "spend_cap", "request_cap",
-                     "budget_exhausted", "parse_failure"]
+                     "budget_exhausted", "parse_failure",
+                     # D-059: the provider was unreachable after every retry.
+                     "provider_error",
+                     # D-056: every proposal in one decision repeated something
+                     # already done. A clinical stop, not a harness failure.
+                     "no_new_actions"]
 #: `crash` is deliberately absent: it means the graph raised, so `finalize`
 #: never ran and `stop_reason` is None. It is a runner-level outcome instead.
 
@@ -53,22 +68,63 @@ class RedFlag(BaseModel):
     turn: int
 
 
+LedgerOutcome = Literal[
+    "result",            # the case returned a record
+    "partial",           # one record returned; part of a bundled request may not exist
+    "repeat",            # the same record was already returned at `ref_turn`
+    "not_in_case",       # the case record holds nothing for this request
+    "answered",          # the patient answered
+    "could_not_answer",  # the patient said they did not know
+]
+
+
+class LedgerEntry(BaseModel):
+    """One thing the doctor has already done, and what came of it (D-056).
+
+    Built **mechanically** from `encounter_log` by the hypothesis node, never
+    written by a model. It holds the doctor's own request text plus an outcome
+    flag — never result or answer text — which is what keeps it on the right
+    side of Q-29/D-041: the orchestrator may know *that* a request returned
+    nothing, but never *what* anything returned.
+
+    `key` is the gatekeeper key a request resolved to. The repeat guard needs it
+    to recognise a second order for a record already delivered; it is never
+    rendered into any prompt.
+    """
+
+    turn: int
+    kind: Literal["test", "exam", "question"]
+    request: str
+    outcome: LedgerOutcome
+    key: str | None = None
+    ref_turn: int | None = None
+
+
 class EncounterSummary(BaseModel):
     """What the doctor actually sees. Raw messages are never resent.
 
     `findings` is **written by the model** in its own words (D-041), not copied
     from the transcript — copying would let the orchestrator read raw event text
-    through the summary and defeat Q-29 entirely. `tests_ordered` is mechanical
-    and safe: those are the doctor's own requests, and carry no result text.
-    `ruled_out` and `open_questions` come from the hypothesis node's output.
-    Each list is truncated oldest-first, and every drop is logged as an Event so
-    the loss is visible in the trace rather than silent.
+    through the summary and defeat Q-29 entirely. `ledger` is mechanical and
+    safe for the same reason `tests_ordered` was: the doctor's own requests and
+    an outcome flag, never result text. `ruled_out` and `open_questions` come
+    from the hypothesis node's output. `findings`, `ruled_out` and
+    `open_questions` are truncated oldest-first with every drop logged; the
+    ledger is never truncated (M-43), because its oldest entries are exactly the
+    refusals the repeat guard relies on.
+
+    `leader_since_turn` and `no_yield_streak` are the information-only progress
+    signal (D-060): computed in code, shown to the orchestrator, and never a
+    stop rule — Q-26 stands.
     """
 
     findings: list[str] = Field(default_factory=list)
-    tests_ordered: list[str] = Field(default_factory=list)
+    ledger: list[LedgerEntry] = Field(default_factory=list)
     ruled_out: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+    leader: str | None = None
+    leader_since_turn: int | None = None
+    no_yield_streak: int = 0
 
 
 class DifferentialItem(BaseModel):

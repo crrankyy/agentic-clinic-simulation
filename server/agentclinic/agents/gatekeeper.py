@@ -25,6 +25,8 @@ Two rules that look like details and are not:
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal
@@ -70,16 +72,32 @@ def contains(key: str, request: str) -> bool:
 
     Containment is directional on purpose. "MRI spine" does not match a request
     for "MRI of the brain", because {mri, spine} is not a subset of
-    {mri, of, the, brain}.
+    {mri, of, the, brain}. The synonym tier must honour the same direction; until
+    D-057 it did not, and "MRI spine" returned `MRI_Brain` (M-09).
     """
     k = tokens(key)
     return bool(k) and k <= tokens(request)
 
 
+#: Token spellings folded to the one the case keys use. "neurological exam"
+#: missed every deterministic tier against `Neurological_Examination` and fell to
+#: the LLM tier -- where a provider hiccup used to become a refusal (M-03).
+_TOKEN_FOLD = {
+    "exam": "examination", "exams": "examination", "examinations": "examination",
+    "neurologic": "neurological", "neuro": "neurological",
+}
+
+
 def normalise(text: str) -> str:
-    """Casefold, underscores to spaces, collapse whitespace, drop punctuation runs."""
-    cleaned = str(text).replace("_", " ").replace("-", " ")
-    return " ".join(cleaned.casefold().split())
+    """Casefold, underscores and hyphens to spaces, drop punctuation, fold spellings.
+
+    The docstring promised punctuation removal long before the code did it:
+    "MRI (brain)." and "MRI of the brain, with contrast" kept their punctuation
+    as part of a token and missed the deterministic tiers (M-23).
+    """
+    cleaned = str(text).replace("_", " ").replace("-", " ").casefold()
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned)
+    return " ".join(_TOKEN_FOLD.get(w, w) for w in cleaned.split())
 
 
 def _leaf_names(node: Any) -> Iterator[str]:
@@ -103,6 +121,9 @@ class MatchResult:
     key: str | None = None
     payload: Any = None
     candidates: tuple[str, ...] = ()
+    #: True when the request bundled several things ("MRI brain and spinal
+    #: cord") and the matched key covers only part of it (M-27).
+    partial: bool = False
 
     @property
     def matched(self) -> bool:
@@ -118,6 +139,10 @@ class GatekeeperReply:
     key: str | None
     cost_usd: float
     unlisted: bool
+    #: result | partial | repeat | not_in_case -- feeds the ledger (D-056).
+    outcome: str = "result"
+    #: For a repeat: the turn the same record was first delivered.
+    ref_turn: int | None = None
 
 
 def load_synonyms(config_dir: Path | None = None) -> dict[str, dict[str, str]]:
@@ -172,8 +197,8 @@ class Gatekeeper:
             and normalise(original) != wanted
         ]
 
-    async def match(self, request: str, domain: Domain = "tests") -> MatchResult:
-        """Resolve a request to at most one top-level key, recording the tier."""
+    def _deterministic(self, request: str, domain: Domain) -> MatchResult | None:
+        """Tiers that need no model: exact, contains, synonym, unique leaf."""
         wanted = normalise(request)
         tree = self._tree(domain)
         top = self._top_level(domain)
@@ -191,28 +216,66 @@ class Gatekeeper:
                                    len(tokens(contained[0])) > len(tokens(contained[1]))):
             key = top[contained[0]]
             return MatchResult(tier="contains", key=key, payload=tree[key],
-                               candidates=tuple(top[c] for c in contained))
+                               candidates=tuple(top[c] for c in contained),
+                               partial=_partial(wanted, contained[0]))
 
         # Tier 2 — curated synonyms. An alias may be a fragment of the request
         # ("CBC with differential"), so aliases are matched by containment too.
         table = self.synonyms.get(domain, {})
         canonical = table.get(wanted)
         if canonical is None:
-            hits = {c for alias, c in table.items() if contains(alias, wanted)}
-            canonical = hits.pop() if len(hits) == 1 else None
+            # Most specific alias wins, as the longest key wins in tier 1b:
+            # "magnetic resonance imaging" beats a generic "imaging".
+            hits = [(len(tokens(alias)), c) for alias, c in table.items() if contains(alias, wanted)]
+            if hits:
+                best = max(n for n, _ in hits)
+                top_hits = {c for n, c in hits if n == best}
+                canonical = top_hits.pop() if len(top_hits) == 1 else None
         if canonical:
             if canonical in top:
                 key = top[canonical]
                 return MatchResult(tier="synonym", key=key, payload=tree[key])
-            by_canonical = [k for k in top if contains(k, canonical) or contains(canonical, k)]
+            # A key qualifies only if every one of its tokens is covered by the
+            # request once the alias is expanded to its canonical name -- the
+            # same direction as the contains tier. The old test also accepted a
+            # key that merely *contained* the canonical, so a modality-only
+            # canonical ("mri") matched any MRI the case had, whatever region
+            # was asked for: "MRI spine" returned MRI_Brain, whose text names
+            # the diagnosis (D-057). A key filed under an alias of the same
+            # canonical ("LFTs" for "liver function tests") also qualifies.
+            expanded = tokens(wanted) | tokens(canonical)
+            by_canonical = [k for k in top
+                            if tokens(k) <= expanded or table.get(k) == canonical]
             if len(by_canonical) == 1:
                 key = top[by_canonical[0]]
-                return MatchResult(tier="synonym", key=key, payload=tree[key])
+                return MatchResult(tier="synonym", key=key, payload=tree[key],
+                                   partial=_partial(wanted, by_canonical[0], canonical))
 
         # Granularity — a request naming a leaf matches its parent.
         parents = self._parents_with_leaf(domain, wanted)
         if len(parents) == 1:
             return MatchResult(tier="leaf", key=parents[0], payload=tree[parents[0]])
+        return None
+
+    def resolve_deterministic(self, request: str, domain: str = "tests") -> str | None:
+        """The key a request resolves to without a model call, or None.
+
+        Used by the repeat guard (D-056) to recognise a second order for a record
+        already delivered. Returns a key name only -- never a payload -- so the
+        orchestrator node that holds this function cannot render a result.
+        """
+        found = self._deterministic(request, domain)  # type: ignore[arg-type]
+        return found.key if found is not None else None
+
+    async def match(self, request: str, domain: Domain = "tests") -> MatchResult:
+        """Resolve a request to at most one top-level key, recording the tier."""
+        found = self._deterministic(request, domain)
+        if found is not None:
+            return found
+        wanted = normalise(request)
+        tree = self._tree(domain)
+
+        parents = self._parents_with_leaf(domain, wanted)
         if len(parents) > 1:
             # D-035: ambiguous analyte. Return exactly one parent, never all.
             chosen = await self._ask_llm(request, tuple(parents))
@@ -233,21 +296,44 @@ class Gatekeeper:
             return None
         return await self.llm_disambiguate(request, candidates)
 
-    async def respond(self, request: str, domain: Domain = "tests") -> GatekeeperReply:
+    async def respond(
+        self, request: str, domain: Domain = "tests", delivered: dict[str, int] | None = None,
+    ) -> GatekeeperReply:
         """Answer a request. Charges the cost whether or not anything matched.
 
         Q-12: an unlisted test still costs money. Free unavailability would let
         the doctor probe the case's key space at no price, and the cost-steward
         would never feel a wasted order.
+
+        `delivered` maps keys already returned in this encounter to the turn they
+        were returned. A second order for the same record gets a reply that says
+        so, without the payload (M-08): medqa-0009 has two tests, and the doctor
+        ordered nine, each time receiving a record it already had and concluding
+        the detail it wanted was "unavailable despite multiple attempts".
+
+        A failed model call in the LLM tier is **not** a refusal. It propagates to
+        the node's harness guard (D-059); before that it was swallowed and the
+        doctor was told the test "is not part of the case record at all" -- in
+        c79bb4e6, two milliseconds after three 429s.
         """
         result = await self.match(request, domain)
         if result.matched:
+            key = result.key or ""
+            if delivered and key in delivered:
+                return GatekeeperReply(
+                    text=(f"This returns the same record already reported at turn "
+                          f"{delivered[key]}. The case record holds nothing more specific "
+                          "for this request."),
+                    tier=result.tier, key=key, cost_usd=self.costs.price(key),
+                    unlisted=False, outcome="repeat", ref_turn=delivered[key],
+                )
             return GatekeeperReply(
                 text=_render(result.key, result.payload),
                 tier=result.tier,
                 key=result.key,
-                cost_usd=self.costs.price(result.key or ""),
+                cost_usd=self.costs.price(key),
                 unlisted=False,
+                outcome="partial" if result.partial else "result",
             )
         return GatekeeperReply(
             text=UNAVAILABLE,
@@ -255,7 +341,32 @@ class Gatekeeper:
             key=None,
             cost_usd=self.costs.unknown_price,
             unlisted=True,
+            outcome="not_in_case",
         )
+
+
+#: Words that qualify a request rather than name a second thing, for the
+#: bundled-request check.
+_QUALIFIERS = frozenset(
+    "with without and or of the a an for to in on contrast gadolinium iv test tests "
+    "testing study studies scan scans imaging level levels panel full complete "
+    "including plus also both left right bilateral repeat urgent stat please".split()
+)
+_CONJUNCTIONS = frozenset({"and", "plus", "also"})
+
+
+def _partial(wanted: str, matched_key: str, canonical: str | None = None) -> bool:
+    """True when a bundled request names something the matched key does not cover.
+
+    Deliberately narrow: only a request containing a conjunction counts, and
+    only leftover words that are not qualifiers. "MRI brain with and without
+    contrast" is not partial; "MRI brain and spinal cord" is.
+    """
+    words = tokens(wanted)
+    if not words & _CONJUNCTIONS:
+        return False
+    covered = tokens(matched_key) | (tokens(canonical) if canonical else frozenset())
+    return bool(words - covered - _QUALIFIERS)
 
 
 def _render(key: str | None, payload: Any, indent: int = 0) -> str:
@@ -284,26 +395,36 @@ def make_llm_disambiguator(caller: Any, case_id: str, config_dir: Path | None = 
     would otherwise be reading results it may not be allowed to return, and the
     brief forbids revealing unordered results.
     """
-    from pydantic import BaseModel
-
     template = (config_dir or CONFIG_DIR).joinpath(
         "prompts", "gatekeeper_disambiguate.md"
     ).read_text(encoding="utf-8")
 
-    class Choice(BaseModel):
-        entry: str
+    from typing import Literal as _Literal
+
+    from pydantic import create_model
+
+    from ..llm.openrouter import StructuredOutputFailed
 
     async def disambiguate(request: str, candidates: tuple[str, ...]) -> str | None:
         prompt = template.format(
             candidates="\n".join(f"- {c}" for c in candidates), request=request
         )
+        # The answer is one of the candidates or NONE, as a type -- an invented
+        # key is now a validation error the repair loop can correct, rather than
+        # a string silently compared away.
+        choice_model = create_model(
+            "Choice", entry=(_Literal[tuple(candidates) + ("NONE",)], ...),  # type: ignore[misc]
+        )
         try:
             choice = await caller.structured(
-                Choice, prompt, case_id=case_id, node="gatekeeper"
+                choice_model, prompt, case_id=case_id, node="gatekeeper"
             )
-        except Exception:  # noqa: BLE001 — an unmatched request is a valid answer
+        except StructuredOutputFailed:
+            # The model could not name a candidate: a genuine "no match".
+            # Provider failures are NOT caught -- they propagate to the node's
+            # harness guard, so an outage can never become a refusal (M-03).
             return None
-        entry = choice.entry.strip()
+        entry = str(getattr(choice, "entry", "")).strip()
         return entry if entry in candidates else None
 
     return disambiguate
