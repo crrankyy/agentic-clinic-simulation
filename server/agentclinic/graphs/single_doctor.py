@@ -84,6 +84,7 @@ def build_single_doctor_graph(
     evidence: Any = None,
     checkpointer: Any = None,
     config_dir: Any = None,
+    question_overlap: float | None = None,
 ) -> Any:
     """Compile the encounter graph for one case.
 
@@ -92,12 +93,19 @@ def build_single_doctor_graph(
     forbids case data reaching a checkpoint.
     """
     hypothesis = make_hypothesis_node(caller, case_id, config_dir)
-    orchestrator = make_orchestrator_node(caller, case_id, decision_model, max_turns, config_dir)
+    orchestrator = make_orchestrator_node(
+        caller, case_id, decision_model, max_turns, config_dir,
+        enabled=enabled, resolve=getattr(gatekeeper, "resolve_deterministic", None),
+        **({"question_overlap": question_overlap} if question_overlap is not None else {}),
+    )
     finalize = make_finalize_node(caller, case_id, config_dir)
 
     graph = StateGraph(EncounterState)
     graph.add_node("brief", lambda state: {})
     graph.add_node("hypothesis", hypothesis)
+    # M-07: one more read of the evidence before a turn-cap finalize, so the
+    # last action's result is in the summary the final answer is built from.
+    graph.add_node("hypothesis_final", make_hypothesis_node(caller, case_id, config_dir))
     graph.add_node("solo_decide", build_solo_decide(orchestrator))
     graph.add_node("absorb_panel", absorb_panel)
     graph.add_node("ask_patient", make_ask_patient(patient, case_id))
@@ -120,8 +128,10 @@ def build_single_doctor_graph(
     for action in enabled:
         graph.add_edge(action, "check_stop")
     graph.add_conditional_edges(
-        "check_stop", route_stop, {"continue": "hypothesis", "stop": "finalize"}
+        "check_stop", lambda s: route_stop(s, absorb_on_cap=True),
+        {"continue": "hypothesis", "stop": "finalize", "absorb": "hypothesis_final"},
     )
+    graph.add_edge("hypothesis_final", "finalize")
     graph.add_edge("finalize", END)
 
     return graph.compile(checkpointer=checkpointer)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -67,11 +68,14 @@ class RunHandle:
     run_id: str
     case_id: str
     config: str
+    started_utc: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(
+        timespec="seconds"))
     events: list[dict[str, Any]] = field(default_factory=list)
     status: str = "running"          # running | finished | failed
     stop_reason: str | None = None
     final: dict[str, Any] | None = None
     error: str | None = None
+    error_class: str | None = None
     _done: asyncio.Event = field(default_factory=asyncio.Event)
     #: Woken on every append so subscribers need no polling interval.
     _tick: asyncio.Event = field(default_factory=asyncio.Event)
@@ -81,8 +85,10 @@ class RunHandle:
         self._tick.set()
 
     def finish(self, *, status: str, stop_reason: str | None = None,
-               final: dict[str, Any] | None = None, error: str | None = None) -> None:
+               final: dict[str, Any] | None = None, error: str | None = None,
+               error_class: str | None = None) -> None:
         self.status, self.stop_reason, self.final, self.error = status, stop_reason, final, error
+        self.error_class = error_class
         self._done.set()
         self._tick.set()
 
@@ -101,7 +107,14 @@ class Engine:
         self.store = CaseStore(self._cases)
         self._models = load_models()
         self._costs = load_test_costs()
-        self._caller_cache: dict[str, Any] = {}
+        self._shared_limits: Any = None
+        from ..llm.preflight import CachedPreflight
+
+        self.preflight = CachedPreflight(self._models)
+
+    @property
+    def models(self) -> Any:
+        return self._models
 
     def case_ids(self) -> tuple[str, ...]:
         return served_case_ids()
@@ -110,30 +123,22 @@ class Engine:
         return self.store.doctor_view(case_id).objective_for_doctor
 
     def _caller(self, tracer: Tracer, timeout: float) -> Any:
-        from ..llm.guards import DailyRequestCounter, RunGuards, SpendTracker, TokenBucket
-        from ..llm.openrouter import LLMCaller, UsageRecorder, build_chat_model
+        """A caller and guards for ONE run.
+
+        The rate bucket and the daily counter are account-wide, so they are
+        shared across runs. The spend tracker is not: shared, the $0.50
+        per-case cap became a lifetime cap per case id, and a case would be
+        refused after about a dozen web runs (M-35).
+        """
+        from ..llm.factory import build_caller, build_guards, build_shared_limits
 
         budgets = load_budgets()
-        if "guards" not in self._caller_cache:
-            self._caller_cache["guards"] = RunGuards(
-                bucket=TokenBucket(rate_per_minute=budgets.rate_per_minute,
-                                   capacity=budgets.rate_per_minute),
-                daily=DailyRequestCounter(RUNS_DIR / ".daily.json",
-                                          limit=budgets.requests_per_day),
-                spend=SpendTracker(per_case_cap=budgets.spend_per_case_usd,
-                                   per_run_cap=budgets.spend_per_run_usd),
-            )
-        guards = self._caller_cache["guards"]
-        chat = build_chat_model(
-            model=self._models.for_role("orchestrator"),
-            pin_provider=self._models.provider.pin,
-            allow_fallbacks=self._models.provider.allow_fallbacks,
-            attribution_title=self._models.provider.attribution_title,
-            timeout=timeout, max_retries=0,
-        )
-        caller = LLMCaller(chat, guards=guards, recorder=UsageRecorder(), tracer=tracer,
-                           structured_method=self._models.structured_output_method,
-                           call_timeout=timeout)
+        if self._shared_limits is None:
+            self._shared_limits = build_shared_limits(self._models, budgets,
+                                                      RUNS_DIR / ".daily.json")
+        guards = build_guards(self._models, budgets, RUNS_DIR / ".daily.json",
+                              shared=self._shared_limits)
+        caller = build_caller(self._models, budgets, guards=guards, tracer=tracer)
         return caller, guards
 
     def build_graph(self, *, case_id: str, config: str, caller: Any, guards: Any,
@@ -153,21 +158,25 @@ class Engine:
             case_id=case_id,
             decision_model=make_orchestrator_decision(ENABLED_ACTIONS),
             enabled=ENABLED_ACTIONS, max_turns=max_turns, guards=guards,
+            question_overlap=load_budgets().question_repeat_overlap,
         )
         if config == "panel":
             return build_encounter_graph(costs=self._costs, **shared)
         return build_single_doctor_graph(**shared)
 
-    def daily_remaining(self) -> int:
+    def daily_remaining(self) -> int | None:
+        """Free-tier requests left today, or None for a paid model (D-062)."""
         from ..llm.guards import DailyRequestCounter
 
         budgets = load_budgets()
-        return DailyRequestCounter(RUNS_DIR / ".daily.json",
-                                   limit=budgets.requests_per_day).remaining()
+        _, per_day = budgets.request_limits(self._models.is_free)
+        return DailyRequestCounter(RUNS_DIR / ".daily.json", limit=per_day).remaining()
 
     def projected_requests(self, config: str, max_turns: int) -> int:
         """Same worst-case projection the CLI refuses on (cli.run)."""
-        return max_turns * (7 if config == "panel" else 3) + 3
+        from ..llm.factory import projected_requests
+
+        return projected_requests(config, max_turns)
 
     def start(self, *, case_id: str, config: str, max_turns: int) -> RunHandle:
         run_id = f"web-{config}-{uuid.uuid4().hex[:8]}"
@@ -180,48 +189,86 @@ class Engine:
         run_dir = RUNS_DIR / handle.run_id
         tracer = Tracer(run_dir=run_dir)
         budgets = load_budgets(max_turns=max_turns, graph=handle.config)
+        from ..eval.runmeta import write_run_meta
+
+        write_run_meta(run_dir, config=handle.config, models=self._models,
+                       max_turns=max_turns, cases=[handle.case_id])
+        state: dict[str, Any] = {}
+        status, error, error_class = "failed", None, None
+        caller = None
         try:
             caller, guards = self._caller(tracer, budgets.timeout_seconds)
             graph = self.build_graph(case_id=handle.case_id, config=handle.config,
                                      caller=caller, guards=guards, max_turns=max_turns)
             view = self.store.doctor_view(handle.case_id)
-            state: dict[str, Any] = {}
             seen = 0
-            async for chunk in graph.astream(
-                new_state(handle.case_id, view.objective_for_doctor),
-                {"recursion_limit": budgets.recursion_limit},
-                stream_mode="values",
-            ):
-                state = chunk
-                log = chunk.get("encounter_log") or []
-                # `encounter_log` is append-only (an `operator.add` reducer), so
-                # everything past the high-water mark is new. Emitting a diff
-                # rather than the whole log is what keeps replay idempotent.
-                for i in range(seen, len(log)):
-                    payload = to_wire(log[i], seq=i)
-                    tracer.event(case_id=handle.case_id, event=log[i], seq=i)
-                    handle.append(payload)
-                seen = len(log)
-                await asyncio.sleep(0)
-            final = state.get("final")
-            handle.finish(status="finished", stop_reason=state.get("stop_reason"),
-                          final=final.model_dump() if final is not None else None)
-            if final is not None:
-                (run_dir / "finals.json").write_text(
-                    json.dumps({handle.case_id: final.model_dump()}, indent=2),
-                    encoding="utf-8")
-            # Without this a replay reports "Finished" for an encounter that
-            # actually hit a cap — the transcript would be faithful and the
-            # verdict on it would not.
-            (run_dir / "summary.json").write_text(json.dumps({
-                "case_id": handle.case_id, "config": handle.config,
-                "stop_reason": state.get("stop_reason"),
-            }, indent=2), encoding="utf-8")
+
+            async def consume() -> None:
+                nonlocal state, seen
+                async for chunk in graph.astream(
+                    new_state(handle.case_id, view.objective_for_doctor),
+                    {"recursion_limit": budgets.recursion_limit},
+                    stream_mode="values",
+                ):
+                    state = chunk
+                    log = chunk.get("encounter_log") or []
+                    # `encounter_log` is append-only (an `operator.add` reducer),
+                    # so everything past the high-water mark is new. Emitting a
+                    # diff rather than the whole log keeps replay idempotent.
+                    for i in range(seen, len(log)):
+                        tracer.event(case_id=handle.case_id, event=log[i], seq=i)
+                        handle.append(to_wire(log[i], seq=i))
+                    seen = len(log)
+                    await asyncio.sleep(0)
+
+            # The CLI's per-case deadline, which the web path never had: a case
+            # that cannot finish in this long is stuck, not slow.
+            await asyncio.wait_for(consume(),
+                                   timeout=budgets.max_turns * 6 * budgets.timeout_seconds)
+            status = "finished"
         except Exception as exc:  # noqa: BLE001 — surfaced to the client as a status
             tracer.error(case_id=handle.case_id, node="graph", exc=exc)
+            error_class = failure_class(exc)
             # Type and message only. An exception can carry prompt text, and a
             # traceback more so.
-            handle.finish(status="failed", error=f"{type(exc).__name__}: {exc}"[:300])
+            error = f"{type(exc).__name__}: {exc}"[:300]
+        finally:
+            final = state.get("final")
+            final_dump = final.model_dump() if final is not None else None
+            if final_dump is not None:
+                (run_dir / "finals.json").write_text(
+                    json.dumps({handle.case_id: final_dump}, indent=2), encoding="utf-8")
+            # Written on every exit, failures included (M-19): replay used to
+            # report a crashed or dead-key run as "Finished", and a capped one
+            # as finished voluntarily.
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "summary.json").write_text(json.dumps({
+                "case_id": handle.case_id, "config": handle.config,
+                "status": status, "stop_reason": state.get("stop_reason"),
+                "error_class": error_class, "error": error,
+                "spend_usd": (caller.guards.spend.case_total(handle.case_id)
+                              if caller is not None and caller.guards is not None else None),
+            }, indent=2), encoding="utf-8")
+            handle.finish(status=status, stop_reason=state.get("stop_reason"),
+                          final=final_dump, error=error, error_class=error_class)
+
+
+def failure_class(exc: BaseException) -> str:
+    """What the client should say about a failed run, by what happened."""
+    from ..llm.guards import BudgetExceeded
+    from ..llm.openrouter import ProviderAuthError, ProviderConfigError, ProviderError
+
+    if isinstance(exc, ProviderAuthError):
+        return "auth"
+    if isinstance(exc, ProviderConfigError):
+        return "config"
+    if isinstance(exc, ProviderError):
+        return exc.error_class
+    if isinstance(exc, BudgetExceeded):
+        return "budget"
+    if isinstance(exc, asyncio.TimeoutError):
+        return "deadline"
+    return "crash"
 
 
 async def stream_live(handle: RunHandle, *, start: int = 0) -> AsyncIterator[dict[str, Any]]:
@@ -245,7 +292,7 @@ async def stream_live(handle: RunHandle, *, start: int = 0) -> AsyncIterator[dic
         )
     yield {"type": "status", "data": {
         "status": handle.status, "stop_reason": handle.stop_reason,
-        "final": handle.final, "error": handle.error,
+        "final": handle.final, "error": handle.error, "error_class": handle.error_class,
         "run_id": handle.run_id, "case_id": handle.case_id, "config": handle.config,
     }}
 

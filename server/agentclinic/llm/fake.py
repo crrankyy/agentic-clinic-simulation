@@ -80,11 +80,23 @@ class FakeChatModel(BaseChatModel):
         written in whichever form reads better at the call site.
         """
 
-        def _invoke(messages: Any) -> BaseModel:
+        def _invoke(messages: Any) -> BaseModel | None:
             self.calls.append(messages if isinstance(messages, list) else [messages])
             nxt = self._next()
+            # A scripted exception is raised as the provider would raise it, so
+            # the caller's failure classification is exercised offline (D-059).
+            if isinstance(nxt, BaseException):
+                raise nxt
+            # None is what LangChain's function-calling parser returns when the
+            # model replied in text instead of calling the tool.
+            if nxt is None:
+                return None
             if isinstance(nxt, schema):
                 return nxt
+            if isinstance(nxt, BaseModel):
+                # e.g. an instance of the run's decision model, while the node
+                # validates against a per-call subclass carrying the repeat guard.
+                return schema.model_validate(nxt.model_dump())
             if isinstance(nxt, dict):
                 return schema.model_validate(nxt)
             raise TypeError(
@@ -92,7 +104,26 @@ class FakeChatModel(BaseChatModel):
                 f"got {type(nxt).__name__}"
             )
 
-        return RunnableLambda(_invoke)
+        async def _ainvoke(messages: Any, config: Any = None) -> BaseModel | None:
+            result = _invoke(messages)
+            # A real provider that answered fires on_llm_end, which is how the
+            # caller tells "replied in text" (NoToolCall, repair) from "no
+            # response at all" (transient, wait). A scripted exception raised
+            # above never gets here -- no response, as with a real failure.
+            from langchain_core.outputs import LLMResult
+
+            finish = "tool_calls" if result is not None else "stop"
+            # LangChain has turned the list into a callback manager by now.
+            callbacks = (config or {}).get("callbacks")
+            for cb in getattr(callbacks, "handlers", callbacks) or []:
+                if hasattr(cb, "on_llm_end"):
+                    await cb.on_llm_end(LLMResult(
+                        generations=[[ChatGeneration(message=AIMessage(content=""),
+                                                     generation_info={"finish_reason": finish})]],
+                        llm_output={"token_usage": {}}))
+            return result
+
+        return RunnableLambda(_invoke, afunc=_ainvoke)
 
     # --- test helpers -----------------------------------------------------
     @property

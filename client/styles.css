@@ -130,6 +130,9 @@ button.secondary { background: var(--panel-2); color: var(--ink); border: 1px so
 .msg.system .who { color: var(--system); }
 .msg.system .text { color: #b6bdc9; font-size: 13px; }
 .msg.alert { border-left-color: var(--challenger); background: #21171a; }
+.msg.guard { border-left-color: var(--steward); background: #1d1823; border-left-style: dashed; }
+.msg.guard .who { color: var(--steward); }
+.msg.guard .text { color: #b6bdc9; font-size: 12.5px; }
 .msg.alert .who { color: var(--challenger); }
 
 /* --- reveal --- */
@@ -149,3 +152,7 @@ button.secondary { background: var(--panel-2); color: var(--ink); border: 1px so
   main { grid-template-columns: 1fr; }
   .transcript { max-height: 60vh; }
 }
+
+.hint-inline { color: var(--dim); font-weight: 400; }
+optgroup { color: var(--dim); font-style: normal; }
+optgroup option { color: var(--ink); }

@@ -19,47 +19,77 @@ without reimplementation — plus a callback that captures OpenRouter's own
 `usage` block, which LangChain does not surface and which is the only source of
 real cost.
 
-### Provider pinning
+### Model and provider — D-061
 
 ```yaml
 provider:
-  pin: ["Novita"]
+  pin: ["Together"]
   allow_fallbacks: false
+roles:            # one model for every role: no role/model confound
+  orchestrator: deepseek/deepseek-v4.1-flash
+  ...
 ```
 
 Without a pin, OpenRouter may route the same model to different providers
 between calls, with different tokenisers, latency and structured-output support.
 A run whose provider changes mid-way is not one experiment.
 
+The provider was chosen by **`cli probe`**, which runs the pipeline's real
+nested schemas against each candidate — the lesson from a model that passed a
+flat schema and then scored 0/2 on the real one:
+
+| Provider | Hypothesis | Orchestrator | Result |
+|---|---|---|---|
+| Together | 5-8 s | 4 s | 6/6 |
+| Fireworks | 17 s | 11 s | 2/2 |
+| DeepInfra | 23 s | 14 s | 2/2 |
+| InferenceNet | 63-91 s | 36-59 s | 4/4 |
+| DeepSeek, Parasail | — | — | refused by the account's training guardrail |
+
+The earlier runs used `inclusionai/ling-3.0-flash-vl:free` on Novita (D-043).
+
+### Per-role limits — D-061
+
+`role_settings` in `models.yaml` gives each role its own `max_tokens` and
+reasoning effort, and every role now actually gets its own settings — before,
+one chat model built from the orchestrator's entry served them all (M-33).
+Unbounded, hypothesis calls reached 32,768 completion tokens three times and
+38,987 once, taking 488 s. A reply cut off at the limit is repaired with "be
+more concise", not silently truncated.
+
 ### Structured output
 
 `structured_output.method: function_calling` — forced tool calling rather than
 native strict schemas or JSON mode. Chosen by **measuring against the real
-nested schema**, which mattered: a flat-schema comparison flattered one model
-that then scored 0/2 on the real one.
+nested schema**. DeepSeek also supports native structured outputs; switching
+would be a deliberate decision, not a side effect of the model change.
 
-### The repair loop
+### Failure handling — D-059
 
-`structured()` retries on invalid output, and distinguishes two failure modes
-that need opposite responses:
+`structured()` classifies a failure **by what happened** — exception type and
+HTTP status — not by how its message reads:
 
-```python
-_EMPTY_SIGNATURES = ("'NoneType' object is not iterable",
-                     "object of type 'NoneType' has no len()")
+| Class | Examples | Response |
+|---|---|---|
+| auth | 401, 402, 403 | raise `ProviderAuthError` at once; run-fatal |
+| config | 400, 404, 422 | raise `ProviderConfigError` at once; run-fatal |
+| transient | 429, 5xx, connection, timeout, empty reply | jittered backoff, **resend unchanged**, shared cooldown on 429; then `ProviderUnavailable` |
+| content | output that did not validate, a text reply instead of the tool call, a truncated reply | repair prompt with the error |
 
-def _looks_empty(exc) -> bool:
-    if isinstance(exc, (EmptyResponse, asyncio.TimeoutError, TimeoutError)):
-        return True
-    return any(s in str(exc) for s in _EMPTY_SIGNATURES)
-```
+Before this, anything not string-matched as "empty" took the content path. A
+401 or a 429 was re-sent within about a second **with the transport error
+pasted into the doctor's prompt**, three times, then reported as "did not
+validate" — which contradicted Q-08. The retry block in `budgets.yaml` was read
+by nothing; it is now the policy.
 
-- **Empty response** → back off and resend **unchanged**. The model said
-  nothing; re-prompting it about its mistake is nonsense.
-- **Invalid content** → re-prompt with the validation error.
+Two further holes closed on the same path:
 
-The `_EMPTY_SIGNATURES` strings exist because a provider returned **HTTP 200 with
-`choices: null`**, which surfaced as a `TypeError` from inside LangChain rather
-than as any modelled error, and escaped the repair loop entirely.
+- **A text reply instead of the forced tool call** returns `None` from
+  LangChain's parser rather than raising. It used to be handed to the node,
+  which crashed on attribute access. It is now a content failure, repaired.
+- **The "empty response" check** matched message strings from an earlier
+  structured-output method; under forced tool calls, `choices: null` surfaces
+  with a different message and was missed. The classifier covers both.
 
 ### `asyncio.wait_for` on every call
 
@@ -74,16 +104,16 @@ sockets and macOS `sample` showing the event loop pumping an async generator.
 The first two hypotheses (a retry storm; the process having died) were both
 wrong. (`D-044`)
 
-### Per-invocation config
+### Usage, per call
 
-Callbacks are attached **per invocation**, not once on the model:
+Callbacks are attached **per invocation**, not once on the model —
+`with_structured_output` proxies to the underlying model and drops bound
+config, so usage once silently read zero for an entire run.
 
-```python
-chat.with_config(callbacks=[...]).with_structured_output(Model)   # ✗ drops callbacks
-```
-
-`with_structured_output` proxies to the underlying model and drops the config,
-so `UsageRecorder` silently recorded zeros for an entire run.
+Since D-059 each attempt also gets its **own** `UsageRecorder`. One shared
+mutable slot was read after failures too, so every failed call re-added the
+previous call's cost to the spend tracker — invisible at $0 on a free model,
+wrong on a paid one — and concurrent cases could read each other's usage.
 
 ## Guards — `llm/guards.py`
 
@@ -91,26 +121,31 @@ Three limits, because three separate things go wrong.
 
 | Guard | Limit | Why it is shaped this way |
 |---|---|---|
-| `TokenBucket` | 18/min | The cap is **per account**, so one shared bucket is the only thing that can enforce it. Concurrency alone bursts past 20/min immediately. |
-| `DailyRequestCounter` | 1000/day | **Persisted to disk.** The cap resets on a wall-clock day and a fresh process must not forget what an earlier one spent. Keyed on **UTC** — which mattered when local time rolled over five hours early. |
-| `SpendTracker` | $0.50/case, $25/run | The **client** owns the authoritative total (`D-039`). State holds a snapshot that lags by at least one node, which would let the cap be exceeded silently. |
+| `TokenBucket` | 18/min free, 60/min paid | The cap is **per account**, so one shared bucket is the only thing that can enforce it. A 429 also sets a shared **cooldown**, so every worker waits, not only the one that was told to. |
+| `DailyRequestCounter` | 1000/day, **free tier only** | Persisted to disk and keyed on UTC. It is a property of OpenRouter's `:free` tier (D-023); applying it to a paid model throttled paid runs by free-tier history (D-062). |
+| `SpendTracker` | $0.50/case, $25/run | The **client** owns the authoritative total (`D-039`). One tracker **per run**: shared across web runs, the per-case cap became a lifetime cap per case id (M-35). |
 
 A breach raises; `budget_guarded` converts it into a clean finalize.
+`llm/factory.py` builds the caller and guards for both the CLI and the web
+engine, so the two cannot drift apart again.
 
-### Measured throughput
+### Preflight — `llm/preflight.py`
 
-The free model delivers **4.7–8.5 requests/minute** against an 18/min bucket.
-**The model is the bottleneck, not the limiter.** Raising concurrency does not
-help.
+Before a run, a zero-token check: is the key accepted and does it have spend
+left (`GET /key`); does the pinned provider serve the model and advertise tool
+calls (`GET /models/{model}/endpoints`); and, before a run starts, one tiny
+**routed** completion. The listing cannot see account guardrails: it showed
+first-party DeepSeek serving the model, and every real call was then refused.
+A revoked key used to be discovered 0.9 s into a run, reported as a schema
+failure.
 
-The daily cap is what actually binds at scale:
+### Measured throughput and cost
 
-| | calls/case | dev (40) | full (214) |
-|---|---|---|---|
-| `single_doctor` | ~41 | 1,630 | 8,800 |
-| `panel` | ~77 | 3,090 | 16,500 |
-
-Both arms on the dev split is roughly **five days** at 1000/day.
+On the free model (the earlier runs) the model delivered **4.7–8.5
+requests/minute** against an 18/min bucket, and the 1000/day cap was what bound
+at scale: both arms on the dev split was about five days. On DeepSeek via
+Together the 2026-09-27 sim cost **$0.027 for three cases**, with 24-33 s of
+model time per case and no provider failures.
 
 ## Tracing — `llm/../tracing.py`
 

@@ -23,10 +23,21 @@ from ..graphs.schemas import (
     FinalAnswer,
     HypothesisUpdate,
 )
-from ..graphs.state import DifferentialItem, EncounterSummary, Event
+from pydantic import create_model, model_validator
+
 from ..graphs.guarding import budget_guarded
+from ..graphs.ledger import (
+    QUESTION_OVERLAP,
+    build_ledger,
+    check_repeat,
+    leader_progress,
+    no_yield_streak,
+    render_ledger,
+    unavailable_lines,
+)
+from ..graphs.state import EVIDENCE_KINDS, DifferentialItem, EncounterSummary, Event
 from ..llm.guards import BudgetExceeded
-from ..llm.openrouter import StructuredOutputFailed
+from ..llm.openrouter import GUARD_MARKER, ProviderUnavailable, StructuredOutputFailed
 
 #: Q-29 / C-18: each summary field is capped, oldest entries dropped first, and
 #: every drop is logged so the loss is visible in the trace rather than silent.
@@ -46,20 +57,48 @@ def render_differential(items: list[DifferentialItem]) -> str:
     )
 
 
-def render_summary(summary: EncounterSummary) -> str:
-    sections = [
-        ("Findings", summary.findings),
-        ("Tests ordered", summary.tests_ordered),
-        ("Ruled out", summary.ruled_out),
-        ("Open questions", summary.open_questions),
-    ]
-    parts = [f"{label}:\n" + "\n".join(f"  - {v}" for v in values)
-             for label, values in sections if values]
+def render_progress(summary: EncounterSummary, turn: int) -> str | None:
+    """The information-only progress signal (D-060). Never a stop rule."""
+    bits = []
+    if summary.leader and summary.leader_since_turn is not None:
+        held = max(0, turn - summary.leader_since_turn)
+        bits.append(f"your leading diagnosis has not changed since turn "
+                    f"{summary.leader_since_turn} ({held} turn{'s' if held != 1 else ''})")
+    if summary.no_yield_streak:
+        n = summary.no_yield_streak
+        bits.append(f"your last {n} action{'s' if n != 1 else ''} produced no new information")
+    return ("Progress: " + "; ".join(bits) + ".") if bits else None
+
+
+def render_summary(summary: EncounterSummary, turn: int | None = None) -> str:
+    parts = []
+    if summary.findings:
+        parts.append("Findings:\n" + "\n".join(f"  - {v}" for v in summary.findings))
+    # D-056: what the doctor has already done, built from the log by code. The
+    # doctor's own request text plus an outcome flag -- never a result.
+    parts.extend(render_ledger(summary.ledger))
+    for label, values in (("Ruled out", summary.ruled_out),
+                          ("Open questions", summary.open_questions)):
+        if values:
+            parts.append(f"{label}:\n" + "\n".join(f"  - {v}" for v in values))
+    if turn is not None:
+        progress = render_progress(summary, turn)
+        if progress:
+            parts.append(progress)
     return "\n".join(parts) if parts else "(nothing recorded yet)"
 
 
 def render_transcript(events: list[Event]) -> str:
-    return "\n".join(f"[turn {e.turn}] {e.actor}: {e.text}" for e in events)
+    """The hypothesis node's view: evidence only (D-058).
+
+    Its own earlier "leading: X" lines, repeated red flags, harness bookkeeping
+    and -- on the panel -- the challenger's argument (attributed to "doctor")
+    used to be about a third of this input. Re-reading its own past guesses as
+    if they were evidence anchors the model on them; the challenger reaches the
+    orchestrator as a typed opinion instead, which is where D-051 wants it.
+    """
+    return "\n".join(f"[turn {e.turn}] {e.actor}: {e.text}"
+                     for e in events if e.kind in EVIDENCE_KINDS)
 
 
 def truncate_field(values: list[str], limit: int = SUMMARY_FIELD_CHARS) -> tuple[list[str], int]:
@@ -78,8 +117,13 @@ def make_hypothesis_node(caller: Any, case_id: str, config_dir: Path | None = No
 
     async def hypothesis(state: dict[str, Any]) -> dict[str, Any]:
         log: list[Event] = state.get("encounter_log", [])
+        previous: EncounterSummary = state.get("summary") or EncounterSummary()
+        ledger = build_ledger(log)
+        unavailable = unavailable_lines(ledger)
         prompt = template.format(
             objective=state.get("objective", ""),
+            previous=render_differential(state.get("differential", [])),
+            unavailable="\n".join(unavailable) if unavailable else "(none)",
             transcript=render_transcript(log) or "(nothing yet)",
         )
         update: HypothesisUpdate = await caller.structured(
@@ -90,18 +134,11 @@ def make_hypothesis_node(caller: Any, case_id: str, config_dir: Path | None = No
         # event text here would leak the transcript into the orchestrator's
         # prompt through the summary and defeat Q-29 entirely.
         findings = list(update.findings)
-        # `tests_ordered` is mechanical and safe: these are the doctor's OWN
-        # requests, which it already knows it made. No result text is included.
-        # The "no result" marker is safe for the same reason -- it states that
-        # the case holds nothing under that request, never what it does hold.
-        tests = [e.text + ("  [no result: not in this case]"
-                           if e.meta.get("unlisted") == "True" else "")
-                 for e in log if e.kind in {"test", "exam"} and e.actor == "doctor"]
 
         events: list[Event] = []
         turn = int(state.get("turn", 0))
-        fields = {}
-        for name, values in (("findings", findings), ("tests_ordered", tests),
+        fields: dict[str, Any] = {}
+        for name, values in (("findings", findings),
                              ("ruled_out", update.ruled_out),
                              ("open_questions", update.open_questions)):
             kept, dropped = truncate_field(values)
@@ -109,12 +146,31 @@ def make_hypothesis_node(caller: Any, case_id: str, config_dir: Path | None = No
             if dropped:
                 events.append(Event(turn=turn, kind="hypothesis", actor="system",
                                     text=f"summary.{name}: dropped {dropped} oldest entries"))
+        # The ledger is never truncated (M-43): its oldest entries are exactly
+        # the refusals the repeat guard relies on.
+        fields["ledger"] = ledger
+        leader, since = leader_progress(previous, update.differential, turn)
+        fields["leader"], fields["leader_since_turn"] = leader, since
+        fields["no_yield_streak"] = no_yield_streak(ledger)
 
-        leader = update.differential[0].diagnosis if update.differential else "(none)"
         events.append(Event(turn=turn, kind="hypothesis", actor="doctor",
-                            text=f"leading: {leader}"))
+                            text=f"leading: {leader or '(none)'}"))
+        # A red flag is logged once, when it is first raised -- not re-emitted
+        # every turn, which doubled them in the transcript.
+        seen = {r.concern.strip().casefold() for r in state.get("red_flags", [])}
         events.extend(Event(turn=turn, kind="red_flag", actor="doctor", text=rf.concern)
-                      for rf in update.red_flags)
+                      for rf in update.red_flags if rf.concern.strip().casefold() not in seen)
+
+        tracer = getattr(caller, "tracer", None)
+        if tracer is not None:
+            # Trace-only (M-18): what the doctor concluded this turn. Never an
+            # encounter_log event -- the hypothesis reads that log and the
+            # viewer streams it.
+            tracer.node(case_id=case_id, node="hypothesis", event="assessment", turn=turn,
+                        differential=[d.model_dump() for d in update.differential],
+                        findings=findings, open_questions=list(update.open_questions),
+                        ruled_out=list(update.ruled_out),
+                        leader_since_turn=since, no_yield_streak=fields["no_yield_streak"])
 
         return {
             "summary": EncounterSummary(**fields),
@@ -135,12 +191,44 @@ _LIKELIHOOD = {
 }
 
 
+#: One line per action, rendered from the run's enabled set. orchestrator.md
+#: used to list `search_literature` in runs where it was disabled -- the model
+#: would be right to pick it, and the schema would reject it (M-45).
+ACTION_TEXT = {
+    "ask_patient": "`ask_patient` — put a question to the patient. `argument` is the question.",
+    "request_exam": ("`request_exam` — request a physical examination. `argument` names "
+                     "the region or examination."),
+    "order_test": "`order_test` — order an investigation. `argument` names the test.",
+    "search_literature": "`search_literature` — consult the literature. `argument` is the query.",
+}
+_ACTION_ORDER = ("ask_patient", "request_exam", "order_test", "search_literature")
+
+
+def render_actions(enabled: frozenset[str] | None) -> str:
+    names = [a for a in _ACTION_ORDER if enabled is None or a in enabled]
+    lines = [f"- {ACTION_TEXT[a]}" for a in names]
+    lines.append("- `finalize` — commit to a diagnosis. Choose this when further "
+                 "information is unlikely to change your answer, or when you have "
+                 "what you need.")
+    return "\n".join(lines)
+
+
 def make_orchestrator_node(
     caller: Any, case_id: str, decision_model: type, max_turns: int,
-    config_dir: Path | None = None,
+    config_dir: Path | None = None, *,
+    enabled: frozenset[str] | None = None,
+    resolve: Callable[[str, str], str | None] | None = None,
+    question_overlap: float = QUESTION_OVERLAP,
 ) -> Callable:
-    """Build the node that chooses one action per turn."""
+    """Build the node that chooses one action per turn.
+
+    `resolve` maps a test or exam request to a case key without a model call
+    (`Gatekeeper.resolve_deterministic`). It returns a key name only, so this
+    node can recognise a second order for a delivered record without ever being
+    able to render its contents.
+    """
     template = _prompt("orchestrator.md", config_dir)
+    actions = render_actions(enabled)
 
     async def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         opinions = []
@@ -161,41 +249,102 @@ def make_orchestrator_node(
         if state.get("cost_objection") and state["cost_objection"].objection:
             opinions.append(f"## Cost review\n\n{state['cost_objection'].objection}")
 
+        turn = int(state.get("turn", 0))
+        summary: EncounterSummary = state.get("summary", EncounterSummary())
+        rendered_summary = render_summary(summary, turn + 1)
         prompt = template.format(
+            actions=actions,
             objective=state.get("objective", ""),
-            turn=int(state.get("turn", 0)) + 1,
+            turn=turn + 1,
             max_turns=max_turns,
             differential=render_differential(state.get("differential", [])),
-            summary=render_summary(state.get("summary", EncounterSummary())),
+            summary=rendered_summary,
             opinions="\n\n".join(opinions),
         )
+
+        # D-056: the repeat guard, as a validator on a per-call subclass of the
+        # run's decision model. A repeat fails validation, the caller's repair
+        # loop re-asks with the reason, and no turn is consumed.
+        rejected: list[dict[str, str]] = []
+        ledger = list(summary.ledger)
+
+        def repeat_guard(self: Any) -> Any:
+            reason = check_repeat(self.action, self.argument, ledger,
+                                  resolve=resolve, question_overlap=question_overlap)
+            if reason:
+                rejected.append({"action": self.action, "argument": self.argument[:200],
+                                 "reason": reason})
+                raise ValueError(reason)
+            return self
+
+        guarded = create_model(
+            getattr(decision_model, "__name__", "OrchestratorDecision"),
+            __base__=decision_model,
+            __validators__={"repeat_guard": model_validator(mode="after")(repeat_guard)},
+        )
+
+        def guard_events() -> list[Event]:
+            return [Event(turn=turn + 1, kind="guard", actor="system",
+                          text=f"blocked {r['action']}: {r['argument'][:140]}",
+                          meta={"action": r["action"], "reason": r["reason"][:300]})
+                    for r in rejected]
+
+        tracer = getattr(caller, "tracer", None)
         try:
             decision = await caller.structured(
-                decision_model, prompt, case_id=case_id, node="orchestrator"
+                guarded, prompt, case_id=case_id, node="orchestrator"
             )
         except StructuredOutputFailed as exc:
+            if GUARD_MARKER in getattr(exc, "last_error", ""):
+                # Every proposal in this decision repeated something already
+                # done. That is a clinical stop, not a harness failure: finalize
+                # runs normally and the case is scored (D-056).
+                if tracer is not None:
+                    tracer.node(case_id=case_id, node="orchestrator", event="decision",
+                                turn=turn + 1, action="finalize", rejected=rejected,
+                                reason="every proposal repeated an earlier action",
+                                summary=rendered_summary[:6000])
+                return {
+                    "action": "finalize",
+                    "action_argument": "",
+                    "stop_reason": "no_new_actions",
+                    "panel_events": guard_events(),
+                    "challenger_opinion": None,
+                    "cost_objection": None,
+                }
             # Q-15: after the repair budget, force a finalize with a DISTINCT
             # stop reason. It must never be confused with a clinical abstention,
             # or the Phase 6 abstention experiment is contaminated.
-            turn = int(state.get("turn", 0))
             return {
                 "action": "finalize",
                 "action_argument": "",
                 "stop_reason": "parse_failure",
                 "parse_failures": exc.attempts,
-                "panel_events": [Event(turn=turn, kind="parse_failure", actor="system",
-                                       text=str(exc)[:300])],
+                "panel_events": guard_events() + [
+                    Event(turn=turn, kind="parse_failure", actor="system", text=str(exc)[:300])],
             }
+        if tracer is not None:
+            # Trace-only (M-18): why the doctor chose this, what it expected, and
+            # the summary it chose from. Never an encounter_log event.
+            tracer.node(case_id=case_id, node="orchestrator", event="decision",
+                        turn=turn + 1, action=decision.action,
+                        argument=decision.argument,
+                        reason=getattr(decision, "reason", ""),
+                        expected_information=getattr(decision, "expected_information", ""),
+                        rejected=rejected, summary=rendered_summary[:6000])
         # One-shot: an opinion is rendered into exactly one decision, then
         # cleared here rather than by the action node. Clearing it downstream
         # meant `order_test` -- the only action that can produce an objection --
         # wiped it before any orchestrator ever saw it.
-        return {
+        update: dict[str, Any] = {
             "action": decision.action,
             "action_argument": decision.argument,
             "challenger_opinion": None,
             "cost_objection": None,
         }
+        if rejected:
+            update["panel_events"] = guard_events()
+        return update
 
     return budget_guarded(orchestrator, channel="panel_events")
 
@@ -232,16 +381,16 @@ def make_finalize_node(caller: Any, case_id: str, config_dir: Path | None = None
 
         answer: FinalAnswer | None = None
         forced_reason: str | None = None
-        if state.get("budget_exhausted"):
+        if state.get("stop_reason") in ("parse_failure", "provider_error"):
+            forced_reason = state["stop_reason"]
+        elif state.get("budget_exhausted"):
             forced_reason = "budget_exhausted"
-        elif state.get("stop_reason") == "parse_failure":
-            forced_reason = "parse_failure"
 
         if forced_reason is None:
             prompt = template.format(
                 objective=state.get("objective", ""),
                 differential=render_differential(differential),
-                summary=render_summary(state.get("summary", EncounterSummary())),
+                summary=render_summary(state.get("summary", EncounterSummary()), turn),
             )
             try:
                 answer = await caller.structured(
@@ -255,6 +404,8 @@ def make_finalize_node(caller: Any, case_id: str, config_dir: Path | None = None
                 forced_reason = "budget_exhausted"
             except StructuredOutputFailed:
                 forced_reason = "parse_failure"
+            except ProviderUnavailable:
+                forced_reason = "provider_error"
 
         if answer is None:
             answer = assembled(forced_reason or "unknown")
@@ -334,7 +485,7 @@ def make_challenger_node(
                                  f"({_LIKELIHOOD[opinion.dangerous_alternative_likelihood]})")],
         }
 
-    return advisory(budget_guarded(challenger, channel=channel),
+    return advisory(budget_guarded(challenger, channel=channel, on_content_failure=False),
                     keys=("challenger_opinion",))
 
 
@@ -389,5 +540,6 @@ def make_cost_steward_node(
                                 text=opinion.objection))
         return {"cost_objection": opinion, "panel_events": events}
 
-    return advisory(budget_guarded(cost_steward, channel="panel_events"),
+    return advisory(budget_guarded(cost_steward, channel="panel_events",
+                                   on_content_failure=False),
                     keys=("cost_objection",))

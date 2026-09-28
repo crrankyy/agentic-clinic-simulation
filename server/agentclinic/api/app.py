@@ -11,6 +11,7 @@ still running. There is no code path on which the two share a payload.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query
@@ -21,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..config import load_budgets, load_dotenv, load_models
 from ..paths import CLIENT_DIR, RUNS_DIR
+from ..eval.runmeta import read_run_meta
 from .engine import CONFIGS, Engine, replay_events, stream_live
 
 DISCLAIMER = (
@@ -57,17 +59,106 @@ class StartRun(BaseModel):
 
 
 @app.get("/api/meta")
-def meta() -> dict[str, Any]:
-    models = load_models()
+async def meta() -> dict[str, Any]:
+    e = engine()
+    models = e.models
     budgets = load_budgets()
+    check = await e.preflight.get()
+    _, per_day = budgets.request_limits(models.is_free)
     return {
         "disclaimer": DISCLAIMER,
         "model": models.for_role("orchestrator"),
         "provider_pin": models.provider.pin,
         "configs": list(CONFIGS),
-        "daily_remaining": engine().daily_remaining(),
-        "daily_limit": budgets.requests_per_day,
+        # D-062: a request allowance only exists on the free tier.
+        "tier": "free" if models.is_free else "paid",
+        "daily_remaining": e.daily_remaining(),
+        "daily_limit": per_day,
+        "spend_cap_per_case_usd": budgets.spend_per_case_usd,
+        # M-17: whether the key works, checked without spending a token.
+        "credential": {"ok": check.ok, "reason": check.reason,
+                       "key_limit_remaining": check.key_limit_remaining},
     }
+
+
+def _case_stop(run_dir: Any, case_id: str) -> str | None:
+    """A case's stop reason: its summary.json (web runs), else the trace's
+    case_end record, else inferred from the transcript (older CLI runs)."""
+    from ..eval.runner import _infer_stop
+    from ..graphs.state import Event
+
+    summary = _summary(run_dir)
+    if summary.get("stop_reason") and summary.get("case_id") in (None, case_id):
+        return summary["stop_reason"]
+    trace = run_dir / "traces" / f"{case_id}.jsonl"
+    if not trace.exists():
+        return None
+    events = []
+    for line in trace.read_text(encoding="utf-8").splitlines():
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if r.get("kind") == "node" and r.get("event") == "case_end":
+            return r.get("stop_reason")
+        if r.get("kind") == "event":
+            events.append(Event(turn=r["turn"], kind=r["event_kind"], actor=r["actor"],
+                                text=r["text"], meta=r.get("meta") or {}))
+    return _infer_stop(events)
+
+
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,120}")
+
+
+def _run_dir(run_id: str) -> Any:
+    """A stored run's directory, or 404. Never a path outside runs/.
+
+    Replay and reveal now accept any recorded case, so the ids that end up in
+    file paths are validated rather than trusted.
+    """
+    if not _RUN_ID.fullmatch(run_id) or run_id in (".", ".."):
+        raise HTTPException(404, f"no run {run_id!r}")
+    d = RUNS_DIR / run_id
+    if not d.is_dir() or d.resolve().parent != RUNS_DIR.resolve():
+        raise HTTPException(404, f"no run {run_id!r}")
+    return d
+
+
+def _recorded(run_dir: Any, case_id: str | None) -> bool:
+    """A known case with a transcript in this run -- what replay may show."""
+    return bool(case_id) and case_id in engine().store.case_ids() and (
+        run_dir / "traces" / f"{case_id}.jsonl").is_file()
+
+
+def _started(run_dir: Any, meta: dict[str, Any]) -> str:
+    """When the run began: run.json, else the earliest trace record."""
+    if meta.get("started_utc"):
+        return str(meta["started_utc"])
+    first: list[str] = []
+    for trace in (run_dir / "traces").glob("*.jsonl"):
+        with trace.open(encoding="utf-8") as fh:
+            line = fh.readline()
+        try:
+            first.append(json.loads(line)["ts"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return min(first) if first else ""
+
+
+def _trace_has_error(run_dir: Any, case_id: str) -> bool:
+    """Runs from before summary.json still recorded their failure in the trace."""
+    trace = run_dir / "traces" / f"{case_id}.jsonl"
+    return trace.exists() and '"kind": "error"' in trace.read_text(encoding="utf-8")
+
+
+def _summary(run_dir: Any) -> dict[str, Any]:
+    path = run_dir / "summary.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 @app.get("/api/cases")
@@ -83,10 +174,11 @@ def runs() -> list[dict[str, Any]]:
     e = engine()
     out: list[dict[str, Any]] = [
         {"run_id": h.run_id, "case_id": h.case_id, "config": h.config,
+         "model": e.models.for_role("orchestrator"), "started": h.started_utc,
          "status": h.status, "source": "live", "events": len(h.events)}
         for h in e.runs.values()
     ]
-    served = set(e.case_ids())
+    known = set(e.store.case_ids())
     if RUNS_DIR.is_dir():
         for d in sorted(RUNS_DIR.iterdir(), reverse=True):
             if not d.is_dir() or d.name in e.runs:
@@ -96,14 +188,38 @@ def runs() -> list[dict[str, Any]]:
                 continue
             for trace in sorted(traces.glob("*.jsonl")):
                 case_id = trace.stem
-                if case_id not in served:
+                # Any recorded case replays -- a 10-case run shows all ten.
+                # Starting a live encounter is still limited to the served set.
+                if case_id not in known:
                     continue
                 n = len(replay_events(d, case_id))
                 if not n:
                     continue  # recorded before events were persisted
+                summary = _summary(d)
+                meta = read_run_meta(d)
+                finals = {}
+                if (d / "finals.json").exists():
+                    try:
+                        finals = json.loads((d / "finals.json").read_text(encoding="utf-8"))
+                    except json.JSONDecodeError:
+                        finals = {}
+                # A web run with no summary.json never reached its finally
+                # block: the process died mid-run. It is not "finished".
                 out.append({"run_id": d.name, "case_id": case_id,
-                            "config": "panel" if "panel" in d.name else "single_doctor",
-                            "status": "finished", "source": "replay", "events": n})
+                            "config": meta.get("config") or summary.get("config") or (
+                                "panel" if "panel" in d.name else "single_doctor"),
+                            "model": meta.get("model"),
+                            "provider_pin": meta.get("provider_pin"),
+                            "status": summary.get("status") or (
+                                "finished" if case_id in finals
+                                else "failed" if _trace_has_error(d, case_id)
+                                else "incomplete"),
+                            "stop_reason": _case_stop(d, case_id),
+                            "started": _started(d, meta),
+                            "source": "replay", "events": n})
+    # Latest run first; cases within a run in case order.
+    out.sort(key=lambda r: r["case_id"])
+    out.sort(key=lambda r: (r.get("started") or "", r["run_id"]), reverse=True)
     return out
 
 
@@ -119,11 +235,17 @@ async def start_run(body: StartRun) -> dict[str, Any]:
     if body.config not in CONFIGS:
         raise HTTPException(400, f"config must be one of {list(CONFIGS)}")
 
+    # M-17: a dead key used to be discovered 0.9 s into the run, after three
+    # attempts reported as "did not validate". Check it first, for free.
+    check = await e.preflight.get(force=True)
+    if not check.ok:
+        raise HTTPException(503, f"cannot start: {check.reason}")
+
     # The same pre-flight the CLI refuses on. Discovering the daily cap mid-run
-    # turns a watchable encounter into a wall of 429s.
+    # turns a watchable encounter into a wall of 429s. Free tier only (D-062).
     projected = e.projected_requests(body.config, body.max_turns)
     remaining = e.daily_remaining()
-    if projected > remaining:
+    if remaining is not None and projected > remaining:
         raise HTTPException(429, f"this run needs roughly {projected} requests but "
                                  f"only {remaining} remain in today's allowance")
     handle = e.start(case_id=body.case_id, config=body.config, max_turns=body.max_turns)
@@ -149,11 +271,9 @@ async def stream(run_id: str, start: int = Query(0, ge=0),
                 yield _sse(payload)
         gen: AsyncIterator[str] = live()
     else:
-        run_dir = RUNS_DIR / run_id
-        if not run_dir.is_dir():
-            raise HTTPException(404, f"no run {run_id!r}")
-        if case_id is None or case_id not in e.case_ids():
-            raise HTTPException(400, "replay needs a served ?case_id=")
+        run_dir = _run_dir(run_id)
+        if not _recorded(run_dir, case_id):
+            raise HTTPException(404, "replay needs a ?case_id= recorded in this run")
         events = replay_events(run_dir, case_id)
         if not events:
             raise HTTPException(404, "that run has no persisted transcript "
@@ -162,17 +282,23 @@ async def stream(run_id: str, start: int = Query(0, ge=0),
         finals_path = run_dir / "finals.json"
         if finals_path.exists():
             final = json.loads(finals_path.read_text(encoding="utf-8")).get(case_id)
-        summary_path = run_dir / "summary.json"
-        stop_reason = (json.loads(summary_path.read_text(encoding="utf-8")).get("stop_reason")
-                       if summary_path.exists() else None)
+        summary = _summary(run_dir)
+        meta = read_run_meta(run_dir)
+        stop_reason = _case_stop(run_dir, case_id)
 
         async def replay() -> AsyncIterator[str]:
             for ev in events[start:]:
                 yield _sse({"type": "event", "data": ev})
+            # The recorded outcome, not an assumed one (M-19).
             yield _sse({"type": "status", "data": {
-                "status": "finished", "stop_reason": stop_reason, "final": final,
-                "error": None, "run_id": run_id, "case_id": case_id,
-                "config": "panel" if "panel" in run_id else "single_doctor"}})
+                "status": summary.get("status") or (
+                    "finished" if final else "failed" if _trace_has_error(run_dir, case_id)
+                    else "incomplete"),
+                "stop_reason": stop_reason, "final": final, "model": meta.get("model"),
+                "error": summary.get("error"), "error_class": summary.get("error_class"),
+                "run_id": run_id, "case_id": case_id,
+                "config": summary.get("config") or (
+                    "panel" if "panel" in run_id else "single_doctor")}})
         gen = replay()
 
     return StreamingResponse(gen, media_type="text/event-stream", headers={
@@ -195,12 +321,11 @@ def reveal(run_id: str, case_id: str | None = None) -> dict[str, Any]:
             raise HTTPException(409, "the encounter is still running")
         case_id = handle.case_id
     else:
-        if not (RUNS_DIR / run_id).is_dir():
-            raise HTTPException(404, f"no run {run_id!r}")
-        if case_id is None:
-            raise HTTPException(400, "reveal needs a ?case_id= for a stored run")
-    if case_id not in e.case_ids():
-        raise HTTPException(404, f"case {case_id!r} is not served")
+        # A stored run is over. It may reveal only a case it actually recorded
+        # -- before, any served case's truth came back for any directory name.
+        run_dir = _run_dir(run_id)
+        if not _recorded(run_dir, case_id):
+            raise HTTPException(404, "reveal needs a ?case_id= recorded in this run")
 
     view = e.store.judge_view(case_id)
     case = e.store.metadata(case_id)

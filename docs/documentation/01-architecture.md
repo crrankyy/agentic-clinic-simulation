@@ -76,10 +76,19 @@ transcript *through* the summary, because an earlier version copied event text
 into it. For the 29 flagged cases that meant the doctor saw the diagnosis on
 every subsequent turn instead of once.
 
-The counterpart is that `summary.tests_ordered` **is** mechanical — those are
-the doctor's own requests and carry no result text. As of **D-055** each request
-also carries whether it returned anything, which states that the case holds
-nothing under that request, never what it does hold.
+The counterpart is that `summary.ledger` **is** mechanical (**D-056**): every
+test, exam and question the doctor has already made, built by code from the
+log, each with an outcome flag — result, partial, repeat, not in this case,
+answered, could not answer. It holds the doctor's own request text and never
+result or answer text, so it states *that* a request returned nothing, never
+*what* anything returned. The gatekeeper key a request resolved to is kept for
+the repeat guard and never rendered.
+
+The ledger is also what the **repeat guard** enforces. D-055 tried to stop
+re-orders by showing the model a marker; live, the model re-ordered with the
+marker in view at every decision. Now the orchestrator node validates each
+decision against the ledger and a repeat fails validation — the caller re-asks,
+and no turn is spent.
 
 ### Wall 4 — the judge is outside the graph
 
@@ -137,5 +146,6 @@ decision; the orchestrator reads their opinions and chooses (**D-025**).
 | How does one turn execute? | `graphs/single_doctor.py`, `graphs/nodes.py` |
 | How does the panel differ? | `graphs/doctor_panel.py`, `graphs/encounter.py` |
 | How is a test request matched? | `agents/gatekeeper.py` |
+| What counts as a repeat? | `graphs/ledger.py` |
 | How is a run scored? | `eval/runner.py`, `eval/metrics.py` |
 | How does the web viewer stream? | `api/engine.py`, `api/wire.py` |

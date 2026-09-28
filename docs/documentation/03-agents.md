@@ -22,7 +22,34 @@ an elevated D-dimer?" gets "I don't know".
 
 The `unknown` flag on every reply makes the rate measurable per run
 (`patient_unknown_rate`), which is the only way to notice a patient model that
-has started fabricating.
+has started fabricating. It is one boolean for a whole reply, so on multi-part
+questions it is unreliable (M-44, deferred).
+
+### Memory and completeness — D-058
+
+The patient used to receive **only the current question**. It could not keep
+its story straight — "I've never been tested for HIV" at turns 9 and 12, "I
+don't know if I've ever been tested" at 16 and 17 — while its prompt told it to
+repeat earlier answers it could not see. It now receives its own earlier
+questions and answers (`patient_history` in `graphs/nodes.py`) — **never test
+results or examination findings**, since on medqa-0002 the MRI text names the
+diagnosis.
+
+Its prompt also changed on two points the transcripts exposed:
+
+- **Answer the whole topic.** Asked about its "significant medical history",
+  it had left out Crohn disease and natalizumab — the facts that make the case —
+  because "do not volunteer the rest of your history" was read as "answer
+  narrowly". Now: tell everything the case file says about the topic asked.
+- **What the case file states is known.** It said three times it was unsure
+  whether it was still on a drug its file calls *current treatment*.
+
+In the 2026-09-27 sim both held: asked the same history question, the patient
+gave Crohn disease, natalizumab and natural negatives in one consistent answer.
+
+> **Still open:** Q-10's split has no category for a personal fact with no
+> natural "negative". Asked whether she still has periods, the medqa-0009
+> patient said she could not answer. Any concrete answer would invent a finding.
 
 ## Gatekeeper — `agents/gatekeeper.py`
 
@@ -66,31 +93,51 @@ The fix also added `electroencephalogram` to the synonym table — **EEG had no
 entry at all**, only `electrocardiogram`/ECG, a different test. The table now
 holds 46 canonical names and 155 aliases across tests and exams.
 
+### The synonym tier was not directional — D-057
+
+D-045's directionality held in the contains tier only. On medqa-0002, "MRI
+spine", "MRI cervical spine" and "MRI spinal cord" all returned `MRI_Brain` —
+whose result names the diagnosis. A modality-only canonical (`mri`) was
+accepted for any key *containing* it, discarding the request's region word.
+
+Now a synonym match requires the key's tokens to be covered by the request once
+the alias is expanded, the most specific alias wins (as the longest key does in
+tier 1b), and the LLM tier's prompt requires the same investigation **and
+region**. `normalise` finally drops punctuation, as its docstring always said,
+and folds `exam`/`neuro`/`neurologic`, so "neurological exam" matches
+`Neurological_Examination` without a model call.
+
 > **Live confirmation:** the first web run resolved "MRI brain (with and without
 > contrast)" through the `contains` tier to key `MRI_Brain`. Before D-045 that
 > request would have fallen through to the LLM.
 
-### Unavailable tests — Q-12 and D-055
+### Unavailable, repeated and partial requests — Q-12, D-055, D-056, D-057
 
 A request the case does not contain is refused, logged as an `unlisted_test`
-event, and **still charged** `unknown_price`. Free unavailability would let the
-doctor probe the key space at no cost, and the cost steward would never feel a
-wasted order.
+event, and **still charged** `unknown_price` (Q-12): free unavailability would
+let the doctor probe the key space at no cost. The refusal says the
+investigation is not part of the case record *at all*, and never what the case
+does hold.
 
-The refusal says the investigation is not part of the case record *at all* and
-that rewording will not retrieve it. It does **not** say what the case does
-hold: that hands over a hint the real task never gives, and on a single-test case
-it is close to naming the answer.
+**D-055 tried to stop re-orders with that wording plus a summary marker, and
+failed live.** In `web-single_doctor-1491dcac` the doctor re-ordered refused
+tests at turns 7, 10 and 14 *with the marker in its summary at every decision*.
+The repeat guard (D-056, in `graphs/ledger.py`) replaced the marker as the
+enforcement; the wording stays.
 
-This was found by watching the viewer. On `medqa-0002` the doctor ordered a CSF
-JC virus PCR, was told "Not available for this patient.", and **re-asked the same
-test reworded on the next turn** — two of eight turns for nothing. The message
-read equally as *"you worded that badly"*, so rewording was rational.
+The gatekeeper also now says when an order re-delivers a record: "the same
+record already reported at turn N; the case record holds nothing more
+specific", **without the payload**. On medqa-0009 — two tests in the case — the
+doctor had ordered nine and received the same records again and again. A
+bundled request that matched only part ("MRI brain *and spinal cord*") is
+marked partial. That check is heuristic and hedged: in the sim it also flagged
+a detailed breast-and-axillary exam whose record did cover the axilla.
 
-The text alone would have fixed nothing, because the orchestrator never saw it.
-`summary.tests_ordered` listed request strings with no outcome attached, so a
-refused order and a fulfilled one rendered as identical lines. Requests now carry
-an `unlisted` marker and the summary renders `[no result: not in this case]`.
+**A failed model call is no longer a refusal.** The LLM tier used to be wrapped
+in `except Exception: return None`; in c79bb4e6 three 429s became "not part of
+the case record at all" 2 ms later. Provider failures now propagate to the
+harness guard (D-059); only a genuine "no match" answer — the model choosing
+`NONE` from a typed list of candidates — is a refusal.
 
 ## Doctor — `agents/doctor.py`
 
@@ -98,8 +145,13 @@ Three nodes plus two sub-roles.
 
 ### `hypothesis`
 
-**The only node that reads `encounter_log`.** Maintains the differential (max 8)
-and writes the summary.
+**The only node that reads `encounter_log`** — and since D-058, only its
+evidence: objective, questions, answers, exams, tests, literature. About a third
+of its input had been its own earlier "leading: X" lines, repeated red flags and
+bookkeeping, and on the panel the challenger's argument attributed to "doctor".
+Its previous differential is passed explicitly, labelled as such. Maintains the
+differential (max 8) and writes the summary, including the mechanical ledger
+and the progress signal (`leader_since_turn`, `no_yield_streak`, D-060).
 
 `findings` is written by the model **in its own words** (`D-041`). An earlier
 version copied event text, which meant the orchestrator read the transcript
@@ -119,7 +171,20 @@ the model would be *correct* to emit it, the output would validate, and the
 router would have no edge. A routing failure reachable by the model behaving
 properly.
 
-Sees the summary and differential, never the log.
+Sees the summary and differential, never the log. The action list in its
+prompt is rendered from the run's enabled set (it used to list the disabled
+`search_literature`).
+
+**The repeat guard (D-056).** Each decision is validated by a per-call subclass
+of the decision model. A test or exam that equals, or is a token-subset of, a
+request the case refused; one that resolves to a record already delivered; or
+a question whose content words overlap an earlier one by ≥ 2/3 — fails
+validation. The caller re-asks with the reason, **no turn is spent**, and the
+block is logged as a `guard` event. If every proposal in one decision is a
+repeat, the encounter ends with `no_new_actions` — scored, and finalize calls
+the model normally. Replayed on the recorded transcripts, the guard blocks 12
+of 32 actions, all genuine repeats. Its decision — action, reason and expected
+information, plus the summary it saw — is written to the trace (M-18).
 
 ### `finalize`
 

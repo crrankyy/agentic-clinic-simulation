@@ -51,7 +51,7 @@ tell a replay from a live run. A test asserts the two are equal.
 
 | Route | Purpose |
 |---|---|
-| `GET /api/meta` | Model, provider pin, **daily allowance remaining**, disclaimer |
+| `GET /api/meta` | Model, provider pin, tier, allowance (free) or spend cap (paid), **whether the key works**, disclaimer |
 | `GET /api/cases` | The three served cases — `case_id` and `objective` only |
 | `GET /api/runs` | Live runs in this process + completed runs on disk |
 | `POST /api/runs` | Start an encounter |
@@ -75,16 +75,20 @@ is a **404, never a substitution**.
 
 ### Pre-flight
 
-`POST /api/runs` refuses with **429** if the projected worst case exceeds the
-remaining daily allowance — the same projection `cli run` uses. Discovering the
-cap mid-run turns a watchable encounter into a wall of 429s.
+`POST /api/runs` first runs the credential and routing preflight
+(`llm/preflight.py`) and refuses with **503** and the reason if it fails — the
+page shows why Start is disabled. A revoked key used to be accepted and fail
+0.9 s later, reported as "HypothesisUpdate did not validate". On the free tier
+it also refuses with **429** if the projected worst case exceeds the remaining
+daily allowance — the same projection `cli run` uses.
 
 ## The engine — `api/engine.py`
 
-Owns the shared LLM client, guards and the live-run registry. **One instance per
-process, and the guards must be shared**: the OpenRouter rate limit and daily
-cap are per-account, so a per-run limiter would let two concurrent runs breach
-both.
+Owns the live-run registry and the account-wide limits. **The rate bucket and
+daily counter are shared** — they are per account, so a per-run limiter would
+let two concurrent runs breach both — but **the spend tracker is per run**:
+shared, the $0.50 per-case cap became a lifetime cap per case id (M-35). A run
+also has the CLI's case deadline, which the web path used to lack.
 
 The judge is **never constructed here**. The reveal reads stored ground truth
 directly; judging is an evaluation concern, and keeping it out of this path means
@@ -117,9 +121,23 @@ traceback.
 Completed runs replay from their traces through the identical channel and spend
 no API allowance. This is the mode to use while working on the UI.
 
-`summary.json` carries `stop_reason` alongside `finals.json`. Without it a
-replay reported "Finished" for an encounter that actually hit a cap — a faithful
-transcript with an unfaithful verdict on it.
+**Choose a model, then a run** (D-063). The model selector defaults to the model
+you ran most recently; beneath it, that model's runs are listed newest first,
+each run grouped with its cases and their outcome. Any case with a recorded
+transcript replays — a 10-case run shows all ten — while starting a *live*
+encounter stays limited to the three served cases. Each run's model comes from
+`run.json`, written when the run starts; older runs fall back to the model the
+provider reported on their calls, then to the report, and otherwise say
+"model not recorded" rather than guess. `run_id` and `case_id` reach file
+paths, so both are validated: a run must be a direct child of `runs/`, and a
+case must have a trace in that run.
+
+`summary.json` carries `status`, `stop_reason`, `error_class` and spend, and is
+written on **every** exit — failures included (M-19). Replay used to report a
+crashed or dead-key run as "Finished", and a capped one as finished
+voluntarily; a run with no summary at all is now listed as `incomplete`. The
+client turns `error_class` into plain language ("OpenRouter rejected the API
+key"), where it used to show "did not validate".
 
 > Runs recorded before **D-054** have no persisted transcript and are excluded
 > from the replay list rather than shown as empty.
@@ -153,6 +171,7 @@ it is an order, from the gatekeeper it is the result.
 - Configuration selector, with a **live worst-case request projection** that
   disables Start if the run would not fit in today's allowance
 - Turn separators, gatekeeper match tier inline, "doesn't know" on patient replies
+- **Repeat blocked** entries for proposals the guard rejected, with the action and "no turn used"
 - The final answer and ranked differential
 - A **Ground truth** panel that appears only once the encounter ends, with the
   answer fetched on click

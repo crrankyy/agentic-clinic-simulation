@@ -28,11 +28,32 @@ from .state import EncounterState, Event
 _CLEARS = {"challenged_this_finalize": False}
 
 
+def patient_history(log: list[Event]) -> list[tuple[str, str]]:
+    """The patient's own earlier exchanges: questions and answers, nothing else.
+
+    Q-10 amended by D-058. The patient used to be given only the current
+    question, so it could not keep its story straight -- "I've never been tested
+    for HIV" at turns 9 and 12, "I don't know if I've ever been tested" at 16 and
+    17. Results and examination findings are never included: in medqa-0002 the
+    MRI text names the diagnosis, and the patient must not be able to hint at it.
+    """
+    pairs: list[tuple[str, str]] = []
+    pending: Event | None = None
+    for e in log:
+        if e.kind == "question" and e.actor == "doctor":
+            pending = e
+        elif e.kind == "answer" and e.actor == "patient" and pending is not None:
+            pairs.append((pending.text, e.text))
+            pending = None
+    return pairs
+
+
 def make_ask_patient(patient: Any, case_id: str) -> Callable:
     async def ask_patient(state: EncounterState) -> dict[str, Any]:
         question = state.get("action_argument") or ""
         turn = int(state.get("turn", 0)) + 1
-        reply = await patient.answer(question, case_id=case_id)
+        history = patient_history(state.get("encounter_log") or [])
+        reply = await patient.answer(question, case_id=case_id, history=history)
         return {
             "encounter_log": [
                 Event(turn=turn, kind="question", actor="doctor", text=question),
@@ -45,22 +66,39 @@ def make_ask_patient(patient: Any, case_id: str) -> Callable:
     return budget_guarded(ask_patient, channel="encounter_log")
 
 
+def delivered_keys(log: list[Event], kind: str) -> dict[str, int]:
+    """Keys already returned in this encounter, with the turn each first arrived."""
+    out: dict[str, int] = {}
+    for e in log:
+        if e.actor != "gatekeeper" or e.kind != kind:
+            continue
+        meta = e.meta or {}
+        key = meta.get("key")
+        if meta.get("tier") in (None, "", "unmatched") or key in (None, "", "None"):
+            continue
+        if meta.get("outcome") == "repeat":
+            continue
+        out.setdefault(key, e.turn)
+    return out
+
+
 def make_gatekeeper_node(gatekeeper: Gatekeeper, domain: str, kind: str) -> Callable:
     async def node(state: EncounterState) -> dict[str, Any]:
         request = state.get("action_argument") or ""
         turn = int(state.get("turn", 0)) + 1
-        reply = await gatekeeper.respond(request, domain)  # type: ignore[arg-type]
+        delivered = delivered_keys(state.get("encounter_log") or [], kind)
+        reply = await gatekeeper.respond(request, domain, delivered)  # type: ignore[arg-type]
         events = [
-            # The doctor's own request carries whether it yielded anything. The
-            # summary is built from these, and without the marker an unavailable
-            # test is indistinguishable there from one that returned a result --
-            # so the orchestrator reads three identical lines and re-orders what
-            # it cannot have.
+            # The doctor's own request carries what came of it. The ledger is
+            # built from these (D-056): outcome, and the key for the repeat
+            # guard. The key never reaches a prompt.
             Event(turn=turn, kind=kind, actor="doctor", text=request,
-                  meta={"unlisted": str(reply.unlisted)}),
+                  meta={"unlisted": str(reply.unlisted), "outcome": reply.outcome,
+                        "key": str(reply.key),
+                        "ref_turn": str(reply.ref_turn) if reply.ref_turn else ""}),
             Event(turn=turn, kind=kind, actor="gatekeeper", text=reply.text,
                   meta={"tier": reply.tier, "key": str(reply.key),
-                        "request": request[:120],
+                        "request": request[:120], "outcome": reply.outcome,
                         "cost_usd": f"{reply.cost_usd:.2f}"}),
         ]
         if reply.unlisted:

@@ -12,9 +12,28 @@ def test_models_load_and_every_role_has_a_model():
     assert cfg.judge.sdk == "anthropic"          # D-021: explicit override of §0.2
     assert cfg.judge.model == "claude-opus-5"
     assert cfg.judge.max_calls_per_run == 200    # D-037
-    for role in ("patient", "gatekeeper", "hypothesis", "orchestrator",
-                 "challenger", "cost_steward", "evidence"):
-        assert cfg.for_role(role).endswith(":free"), f"{role} must use a free model (D-020)"
+    roles = ("patient", "gatekeeper", "hypothesis", "orchestrator", "finalize",
+             "challenger", "cost_steward", "evidence")
+    models = {cfg.for_role(role) for role in roles}
+    # D-020's surviving half (D-061 superseded ":free" at the user's direction):
+    # one model for every role, so no comparison is confounded by role/model.
+    assert len(models) == 1, f"every role must use the same model, got {models}"
+
+
+def test_every_role_has_bounded_output():
+    """D-061: unbounded, hypothesis calls ran to 32-39k tokens and 488 s."""
+    cfg = load_models()
+    for role in ("patient", "gatekeeper", "hypothesis", "orchestrator", "finalize",
+                 "challenger", "cost_steward"):
+        assert cfg.settings_for(role).max_tokens, f"{role} has no max_tokens"
+
+
+def test_free_tier_limits_apply_only_to_free_models():
+    """D-062: the 1000/day cap is a property of OpenRouter's :free tier."""
+    b = load_budgets()
+    assert b.request_limits(free=True) == (18.0, 1000)
+    rate, per_day = b.request_limits(free=False)
+    assert per_day is None and rate > 18
 
 
 def test_provider_is_pinned_for_reproducibility():

@@ -7,7 +7,7 @@ nothing in this module embeds prompt text (brief §12).
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,18 @@ class ProviderConfig:
     pin: list[str]
     allow_fallbacks: bool
     attribution_title: str
+    #: Ask OpenRouter to skip endpoints that do not advertise every parameter
+    #: the request uses. Off by default: on ling/Novita it rejected an endpoint
+    #: that does serve tool calls. `cli probe` tests it per provider.
+    require_parameters: bool = False
+
+
+@dataclass(frozen=True)
+class RoleSettings:
+    """Per-role request limits (D-061)."""
+
+    max_tokens: int | None = None
+    reasoning: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +57,15 @@ class ModelConfig:
     #: some only offer tool calling, which is a perfectly good mechanism when the
     #: model also supports tool_choice so the call can be forced.
     structured_output_method: str = "function_calling"
+    role_settings: dict[str, RoleSettings] = field(default_factory=dict)
+
+    def settings_for(self, role: str) -> RoleSettings:
+        return self.role_settings.get(role) or self.role_settings.get("default") or RoleSettings()
+
+    @property
+    def is_free(self) -> bool:
+        """OpenRouter's free tier is a property of the model id (D-062)."""
+        return all(m.endswith(":free") for m in self.roles.values())
 
     def for_role(self, role: str) -> str:
         try:
@@ -66,6 +87,27 @@ class Budgets:
     concurrency: int
     retry_attempts: int
     timeout_seconds: float
+    paid_rate_per_minute: float = 60.0
+    transient_attempts: int = 5
+    timeout_retries: int = 2
+    backoff_base_s: float = 2.0
+    backoff_cap_s: float = 60.0
+    question_repeat_overlap: float = 2 / 3
+
+    def request_limits(self, free: bool) -> tuple[float, int | None]:
+        """(rate per minute, requests per day or None) for the model's tier."""
+        if free:
+            return self.rate_per_minute, self.requests_per_day
+        return self.paid_rate_per_minute, None
+
+    def retry_policy(self) -> Any:
+        from .llm.openrouter import RetryPolicy
+
+        return RetryPolicy(content_attempts=self.retry_attempts,
+                           transient_attempts=self.transient_attempts,
+                           timeout_retries=self.timeout_retries,
+                           backoff_base_s=self.backoff_base_s,
+                           backoff_cap_s=self.backoff_cap_s)
 
 
 @dataclass(frozen=True)
@@ -82,12 +124,19 @@ def load_models(config_dir: Path | None = None) -> ModelConfig:
     raw = _load("models.yaml", config_dir)
     p = raw["provider"]
     j = raw["judge"]
+    settings = {
+        role: RoleSettings(max_tokens=(int(v["max_tokens"]) if v.get("max_tokens") else None),
+                           reasoning=dict(v["reasoning"]) if v.get("reasoning") else None)
+        for role, v in (raw.get("role_settings") or {}).items()
+    }
     return ModelConfig(
         provider=ProviderConfig(
             base_url=p["base_url"], pin=list(p["pin"]),
             allow_fallbacks=bool(p["allow_fallbacks"]),
             attribution_title=p["attribution_title"],
+            require_parameters=bool(p.get("require_parameters", False)),
         ),
+        role_settings=settings,
         roles=dict(raw["roles"]),
         judge=JudgeConfig(sdk=j["sdk"], model=j["model"],
                           max_calls_per_run=int(j["max_calls_per_run"]),
@@ -127,8 +176,14 @@ def load_budgets(
         rate_per_minute=float(req["rate_per_minute"]),
         requests_per_day=int(req["per_day"]),
         concurrency=int(req["concurrency"]),
-        retry_attempts=int(ret["attempts"]),
+        retry_attempts=int(ret.get("content_attempts", ret.get("attempts", 3))),
         timeout_seconds=float(ret["timeout_seconds"]),
+        paid_rate_per_minute=float(req.get("paid_rate_per_minute", 60)),
+        transient_attempts=int(ret.get("transient_attempts", 5)),
+        timeout_retries=int(ret.get("timeout_retries", 2)),
+        backoff_base_s=float(ret.get("backoff_base_s", 2)),
+        backoff_cap_s=float(ret.get("backoff_cap_s", 60)),
+        question_repeat_overlap=float((raw.get("guard") or {}).get("question_repeat_overlap", 2 / 3)),
     )
 
 

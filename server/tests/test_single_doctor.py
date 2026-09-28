@@ -46,7 +46,7 @@ async def test_every_enabled_action_is_routable(cases, action, argument):
 
 
 async def test_turn_cap_forces_a_final_answer(cases):
-    script = [HYP, decide("ask_patient", "q1"), HYP, decide("ask_patient", "q2"), FINAL]
+    script = [HYP, decide("ask_patient", "q1"), HYP, decide("ask_patient", "q2"), HYP, FINAL]
     graph, _, store = build(cases, script, max_turns=2)
     out = await run(graph, store)
     assert out["stop_reason"] == "turn_cap" and out["final"] is not None
@@ -148,7 +148,7 @@ async def test_budget_breach_inside_ask_patient_does_not_crash_the_case(cases, t
     """
 
     class BreachingPatient:
-        async def answer(self, question, *, case_id):
+        async def answer(self, question, *, case_id, history=()):
             from agentclinic.llm.guards import BudgetExceeded
 
             raise BudgetExceeded("spend_cap", "simulated breach inside ask_patient")
@@ -216,11 +216,12 @@ async def test_an_unavailable_test_is_marked_in_the_summary_the_orchestrator_rea
     prompts = [p for p in model.rendered_prompts if "Choose exactly one action" in p]
     after = [p for p in prompts if "CSF JC virus PCR" in p]
     assert after, "the request never reached the summary at all"
-    assert "[no result: not in this case]" in after[0], (
+    line = [ln for ln in after[0].splitlines() if "CSF JC virus PCR" in ln][0]
+    assert "NOT IN THIS CASE" in line, (
         "an unavailable test is indistinguishable from a fulfilled one"
     )
     # The test that *did* resolve must not be marked.
     got = [p for p in prompts if "MRI brain with contrast" in p]
     assert got, "the fulfilled request never reached the summary"
     mri_line = [ln for ln in got[-1].splitlines() if "MRI brain with contrast" in ln][0]
-    assert "[no result" not in mri_line, mri_line
+    assert "NOT IN THIS CASE" not in mri_line and "result received" in mri_line, mri_line

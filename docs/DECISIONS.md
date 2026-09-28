@@ -1078,3 +1078,165 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
 - **Tests:** `test_the_refusal_says_the_case_lacks_it_not_merely_that_it_is_unavailable`
   and `test_an_unavailable_test_is_marked_in_the_summary_the_orchestrator_reads`,
   the latter verified to fail against the pre-fix summary.
+
+## D-056 — Repeats are rejected in code, from a mechanical action ledger (supersedes D-055's marker)
+
+- **Date:** 2026-09-27
+- **Question:** D-055 made refusals explicit and marked refused requests in the
+  summary. Live, in `web-single_doctor-1491dcac`, the doctor re-ordered refused
+  tests at t7, t10 and t14 **with the marker in its summary at every decision**
+  (truncation ruled out: the field peaked at 433/2000 chars). It also re-asked
+  questions — HIV status or risk in 8 of 18 turns — and on medqa-0009 ordered 9
+  tests against a case with 2, re-receiving records it already had.
+- **Options:** (a) stronger prompt wording; (b) a visible ledger only; (c) a
+  ledger plus a guard in code.
+- **Decision:** (c), with the user's approval of the fix scope. The hypothesis
+  node builds `summary.ledger` mechanically from `encounter_log`: every test,
+  exam and question with its outcome (result / partial / repeat / not in case /
+  answered / could not answer). The orchestrator node validates each decision
+  against it with a per-call subclass of the decision model: a request that is
+  equal to or a token-subset of a refused one, one that resolves to a record
+  already delivered, or a question whose content words overlap an earlier one
+  by ≥ 2/3 is rejected; the repair loop re-asks and **no turn is consumed** —
+  the mechanism that already rejects a disabled action (C-3). If every proposal
+  in one decision is a repeat, the encounter ends with stop_reason
+  `no_new_actions`: a clinical stop, scored, finalize calls the model.
+- **Measured before shipping:** replayed on the three recorded transcripts, the
+  guard blocks 12 of 32 actions, every one a genuine repeat, with no false
+  positives. It misses two loose rephrasings (1491dcac t5, t18), which the
+  visible ledger has to cover.
+- **Isolation:** the ledger holds the doctor's own request text and an outcome
+  flag, never result or answer text. The resolver the guard uses returns key
+  names only and the key is never rendered — tests assert both.
+- **Lesson recorded:** D-055's test checked that a marker was *rendered*; it
+  passed and the behaviour continued. The new tests check behaviour: how many
+  times the gatekeeper was called and whether a turn was spent.
+
+## D-057 — The gatekeeper's synonym tier honours direction; exams and punctuation normalise
+
+- **Date:** 2026-09-27
+- **Question:** "MRI spine", "MRI cervical spine" and "MRI spinal cord" all
+  returned `MRI_Brain` on medqa-0002 — whose result names the diagnosis. D-045
+  claimed containment was directional; that held in the contains tier only.
+- **Cause:** a modality-only canonical (`mri`) was accepted for any key that
+  *contained* it, discarding the request's region word.
+- **Decision:** a synonym match requires the key's tokens to be covered by the
+  request once the alias is expanded (or the key to be an alias of the same
+  canonical); the most specific alias wins, as the longest key wins in tier 1b.
+  `normalise` now does what its docstring always claimed (drops punctuation)
+  and folds `exam`/`neuro`/`neurologic`, so "neurological exam" matches
+  `Neurological_Examination` without a model call. The LLM tier's prompt now
+  requires the same investigation *and region*.
+- **Also:** a failed LLM-tier call is no longer swallowed into a refusal — in
+  c79bb4e6 three 429s became "not part of the case record at all" 2 ms later.
+  Provider failures propagate to the harness guard (D-059); only a genuine "no
+  match" answer is a refusal. A second order for a delivered record gets "the
+  same record already reported at turn N", without the payload. A bundled
+  request that matched only part ("MRI brain and spinal cord") is marked
+  partial.
+
+## D-058 — The patient remembers its own answers; the hypothesis reads evidence only (amends Q-10)
+
+- **Date:** 2026-09-27
+- **Question:** The patient was given only the current question, so it
+  contradicted itself ("never been tested for HIV" at t9 and t12, "I don't know
+  if I've ever been tested" at t16 and t17), withheld Crohn disease and
+  natalizumab when asked about its medical history, and said three times it was
+  unsure whether it was still on a drug its case file calls current treatment.
+- **Decision:** the patient receives its own earlier questions and answers —
+  question and answer events only, never results or findings (the MRI text
+  names the diagnosis). Its prompt now says to answer the whole of the topic it
+  was asked about, that anything in its case file is known, and to stay
+  consistent. Q-10's split (natural negatives vs clinical ignorance) stands.
+- **Also:** the hypothesis node's transcript is filtered to evidence kinds
+  (objective, question, answer, exam, test, literature). About a third of its
+  input had been its own earlier "leading: X" lines, repeated red flags and
+  bookkeeping — and on the panel, the challenger's argument attributed to
+  "doctor". Its previous differential is passed explicitly and labelled. Red
+  flags are logged once, when first raised. `hypothesis.md` no longer says "you
+  cannot examine the patient" — 1 exam in 69 recorded actions.
+
+## D-059 — Failures are handled by what happened (restores Q-08; amends D-040, D-044)
+
+- **Date:** 2026-09-27
+- **Question:** Every exception not string-matched as "empty" went through the
+  content-repair path: a 401 or 429 was re-sent within ~1 s with the transport
+  error pasted into the doctor's prompt, three times, then reported as "did not
+  validate". A provider failure in `hypothesis` or `ask_patient` crashed the
+  whole case (c79bb4e6, with the answer in hand). Failed calls re-counted the
+  previous call's cost (a stale shared usage slot). A text reply instead of the
+  forced tool call returned `None` unrepaired.
+- **Decision:** failures are classified by type and status. 401/402/403 and
+  400/404/422 raise at once (`ProviderAuthError`, `ProviderConfigError`) and
+  are run-fatal — the evaluation aborts instead of crashing each case. 429,
+  5xx, connection, empty and timeout back off with jitter (Retry-After wins),
+  resend unchanged, and share a cooldown across workers; after the budget in
+  `budgets.yaml` (now actually read) they raise `ProviderUnavailable`, which
+  every model-calling node's guard turns into stop_reason `provider_error`
+  (outcome `error`, excluded from accuracy) and a forced finalize. Only output
+  that did not validate, a missing tool call, or a truncated reply earns a
+  repair prompt. Usage is captured per call.
+- **Also:** routing sends any stop a deliberation set straight to finalize (on
+  the panel it detoured through `challenger_final`); a turn-cap finalize runs
+  one more hypothesis pass first so the last result is read (M-07).
+
+## D-060 — The stop signal is information only (Q-26 stands)
+
+- **Date:** 2026-09-27
+- **Question:** The doctor kept investigating after it had the answer: 78% of
+  actions came after the MRI that names PML, whose leader never changed. Hard
+  stop after N no-yield actions, or information only?
+- **Decision:** information only, at the user's choice. The summary carries
+  `leader_since_turn` and `no_yield_streak`, computed in code, rendered as a
+  "Progress:" line. No new stop rule; Q-26 stands. The orchestrator prompt now
+  says the job ends at a diagnosis and that `expected_information` must name
+  something obtainable.
+
+## D-061 — deepseek/deepseek-v4.1-flash on Together, with bounded output (supersedes D-043's model; amends D-020)
+
+- **Date:** 2026-09-27
+- **Decision:** the user chose deepseek/deepseek-v4.1-flash for the sim. It is
+  paid, so D-020's ":free" half is superseded; its surviving half — one model
+  for every role — is now the asserted property. `cli probe` (new) ran the
+  D-043 procedure on the real nested schemas: Together 6/6 at 4-8 s per call,
+  Fireworks and DeepInfra 2/2 at 11-23 s, InferenceNet 4/4 at 36-91 s;
+  first-party DeepSeek and Parasail were refused by the account's guardrail
+  ("Paid model training violation"), an account privacy setting left alone.
+  Pinned to Together for speed; DeepInfra is the cheaper fallback.
+- **Also:** every role now has `max_tokens` and a reasoning setting
+  (`role_settings` in models.yaml). Hypothesis calls had reached 32,768
+  completion tokens three times and 38,987 once (488 s). Per-role model
+  settings are now honoured — before, one chat model built from the
+  orchestrator entry served every role.
+
+## D-062 — Free-tier limits apply to free models only; spend is tracked per run; preflight before spending (amends D-023)
+
+- **Date:** 2026-09-27
+- **Decision:** the 18/min bucket and 1000/day cap apply only when every role
+  uses a `:free` model; a paid model gets 60/min and no daily cap, with the
+  spend caps as its guard. The web engine builds a fresh spend tracker per run
+  (shared, the $0.50 per-case cap became a lifetime cap per case id), sharing
+  only the account-wide bucket and counter. A zero-token preflight checks the
+  key and the pinned endpoint before any run, and with `routing` makes one tiny
+  routed call — the endpoint listing cannot see account guardrails. The viewer
+  shows whether the key works and why Start is disabled, and `summary.json` is
+  written on every exit so replay reports failed runs as failed.
+
+## D-063 — The viewer replays any recorded case, by model, latest first (relaxes D-053's served set for replay)
+
+- **Date:** 2026-09-28
+- **Question:** The user asked to select a model and view its past runs, latest
+  first, after a 10-case DeepSeek run. The viewer replayed only the three cases
+  it serves for live runs, so seven of the ten would have been invisible.
+- **Decision:** replay and reveal accept any case that has a transcript in the
+  run being viewed; **starting a live encounter is still limited to the served
+  three**. `/api/runs` returns every recorded case with the run's model and
+  start time (`run.json`, written at the start of every run since D-062's
+  follow-up; else the model the provider reported on the run's calls; else the
+  report; never a guess), sorted newest run first. The client has a model
+  selector, defaulting to the most recently used model, and groups each run's
+  cases under it.
+- **Hardening that came with it:** `run_id` and `case_id` from the URL now reach
+  file paths, so both are validated — a run must be a direct child of `runs/`
+  and a case must be a known case with a trace in that run. Before, a stored-run
+  reveal answered for any served case under any directory name, `..` included.

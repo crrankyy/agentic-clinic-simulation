@@ -20,9 +20,22 @@ from agentclinic.data.views import CaseStore
 from agentclinic.graphs.state import Event
 
 
+class StubPreflight:
+    """No test may touch the network; the real check calls OpenRouter."""
+
+    def __init__(self, ok: bool = True, reason: str = "ok") -> None:
+        from agentclinic.llm.preflight import PreflightResult
+
+        self.result = PreflightResult(ok=ok, reason=reason)
+
+    async def get(self, *, force: bool = False):
+        return self.result
+
+
 @pytest.fixture
 def client(cases):
     app_module._engine = None          # the app builds its engine lazily
+    app_module.engine().preflight = StubPreflight()
     with TestClient(app_module.app) as c:
         yield c
     app_module._engine = None
@@ -268,3 +281,118 @@ def test_replay_reports_the_real_stop_reason_not_just_finished(client, tmp_path,
     body = client.get(f"/api/runs/web-panel-capped/stream",
                       params={"case_id": SERVED_CASES[0]}).text
     assert '"stop_reason": "turn_cap"' in body, body
+
+
+def test_a_dead_key_is_refused_before_the_run_starts(client):
+    """M-17: web-panel-8c0fe568 was accepted with a revoked key and failed
+    0.9 s later, after three attempts reported as "did not validate"."""
+    app_module.engine().preflight = StubPreflight(
+        ok=False, reason="OpenRouter rejected the API key (401: User not found).")
+    r = client.post("/api/runs", json={"case_id": SERVED_CASES[0], "config": "single_doctor"})
+    assert r.status_code == 503
+    assert "rejected the API key" in r.json()["detail"]
+    meta = client.get("/api/meta").json()
+    assert meta["credential"]["ok"] is False
+
+
+def test_replay_reports_a_failed_run_as_failed(client, tmp_path, monkeypatch):
+    """M-19: replay used to call every run on disk "finished"."""
+    monkeypatch.setattr(app_module, "RUNS_DIR", tmp_path)
+    run_dir = tmp_path / "web-panel-dead"
+    (run_dir / "traces").mkdir(parents=True)
+    (run_dir / "traces" / f"{SERVED_CASES[0]}.jsonl").write_text(json.dumps(
+        {"kind": "event", "seq": 0, "turn": 0, "event_kind": "objective",
+         "actor": "system", "text": "referral", "meta": {}}), encoding="utf-8")
+    (run_dir / "summary.json").write_text(json.dumps(
+        {"case_id": SERVED_CASES[0], "config": "panel", "status": "failed",
+         "error_class": "auth", "error": "ProviderAuthError: 401"}), encoding="utf-8")
+    listed = [r for r in client.get("/api/runs").json() if r["run_id"] == "web-panel-dead"]
+    assert listed and listed[0]["status"] == "failed"
+    body = client.get("/api/runs/web-panel-dead/stream",
+                      params={"case_id": SERVED_CASES[0]}).text
+    assert '"status": "failed"' in body and '"error_class": "auth"' in body
+
+
+async def test_each_web_run_gets_its_own_spend_tracker(cases, tmp_path, monkeypatch):
+    """M-35: one shared tracker turned the per-case cap into a lifetime cap."""
+    from agentclinic.api.engine import Engine
+    from agentclinic.llm.preflight import PreflightResult  # noqa: F401
+
+    monkeypatch.setattr("agentclinic.api.engine.RUNS_DIR", tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-not-real")
+    e = Engine()
+    _, g1 = e._caller(tracer=None, timeout=10)
+    g1.spend.add(SERVED_CASES[0], 0.49)
+    _, g2 = e._caller(tracer=None, timeout=10)
+    assert g2.spend.case_total(SERVED_CASES[0]) == 0.0
+    assert g1.bucket is g2.bucket, "the rate bucket is per account and must be shared"
+
+
+def test_every_replayable_run_says_which_model_produced_it(client, tmp_path, monkeypatch):
+    """A DeepSeek run and a ling run of the same case must not be confused."""
+    monkeypatch.setattr(app_module, "RUNS_DIR", tmp_path)
+    for name, model in (("dev-single_doctor-aaaa", "deepseek/deepseek-v4.1-flash"),
+                        ("web-single_doctor-bbbb", None)):
+        d = tmp_path / name
+        (d / "traces").mkdir(parents=True)
+        lines = [{"kind": "event", "seq": 0, "turn": 0, "event_kind": "objective",
+                  "actor": "system", "text": "referral", "meta": {}},
+                 {"kind": "event", "seq": 1, "turn": 1, "event_kind": "stop",
+                  "actor": "doctor", "text": "final: X", "meta": {}}]
+        if model:
+            lines.append({"kind": "llm_call", "node": "hypothesis", "model": model})
+        (d / "traces" / f"{SERVED_CASES[0]}.jsonl").write_text(
+            "\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+        (d / "finals.json").write_text(json.dumps({SERVED_CASES[0]: {"diagnosis": "X"}}))
+    rows = {r["run_id"]: r for r in client.get("/api/runs").json()}
+    assert rows["dev-single_doctor-aaaa"]["model"] == "deepseek/deepseek-v4.1-flash"
+    assert rows["web-single_doctor-bbbb"]["model"] is None, "never guessed"
+    # A CLI run has no summary.json; its stop reason comes from the transcript.
+    assert rows["dev-single_doctor-aaaa"]["stop_reason"] == "finalize"
+
+
+def _fake_run(root, name, cases, started, model="deepseek/deepseek-v4.1-flash"):
+    d = root / name
+    (d / "traces").mkdir(parents=True)
+    for cid in cases:
+        (d / "traces" / f"{cid}.jsonl").write_text("\n".join(json.dumps(x) for x in [
+            {"ts": started, "kind": "event", "seq": 0, "turn": 0, "event_kind": "objective",
+             "actor": "system", "text": "referral", "meta": {}},
+            {"ts": started, "kind": "event", "seq": 1, "turn": 1, "event_kind": "stop",
+             "actor": "doctor", "text": "final: X", "meta": {}}]), encoding="utf-8")
+    (d / "run.json").write_text(json.dumps({"config": "single_doctor", "model": model,
+                                            "started_utc": started}))
+    (d / "finals.json").write_text(json.dumps({c: {"diagnosis": "X"} for c in cases}))
+    return d
+
+
+def test_runs_come_back_latest_first_and_include_every_recorded_case(client, tmp_path, monkeypatch):
+    """A 10-case run must show all ten, not only the three served for live runs."""
+    monkeypatch.setattr(app_module, "RUNS_DIR", tmp_path)
+    _fake_run(tmp_path, "dev-single_doctor-old", ["medqa-0009"], "2026-09-15T10:00:00+00:00")
+    _fake_run(tmp_path, "dev-single_doctor-new", ["medqa-0031", "medqa-0013"],
+              "2026-09-28T10:00:00+00:00")
+    rows = client.get("/api/runs").json()
+    assert [(r["run_id"], r["case_id"]) for r in rows] == [
+        ("dev-single_doctor-new", "medqa-0013"), ("dev-single_doctor-new", "medqa-0031"),
+        ("dev-single_doctor-old", "medqa-0009")]
+    body = client.get("/api/runs/dev-single_doctor-new/stream",
+                      params={"case_id": "medqa-0031"}).text
+    assert '"status": "finished"' in body
+
+
+def test_reveal_answers_only_for_a_case_the_run_recorded(client, tmp_path, monkeypatch):
+    """Before, any served case's truth came back for any directory name --
+    including '..'."""
+    monkeypatch.setattr(app_module, "RUNS_DIR", tmp_path)
+    _fake_run(tmp_path, "dev-single_doctor-r", ["medqa-0031"], "2026-09-28T10:00:00+00:00")
+    assert client.get("/api/runs/dev-single_doctor-r/reveal",
+                      params={"case_id": "medqa-0031"}).status_code == 200
+    assert client.get("/api/runs/dev-single_doctor-r/reveal",
+                      params={"case_id": "medqa-0002"}).status_code == 404
+    for bad in ("..", ".", "..%2F..", "x..y/../z"):
+        r = client.get(f"/api/runs/{bad}/reveal", params={"case_id": "medqa-0002"})
+        assert r.status_code == 404, bad
+    r = client.get("/api/runs/dev-single_doctor-r/stream",
+                   params={"case_id": "../../../etc/passwd"})
+    assert r.status_code == 404

@@ -22,12 +22,29 @@ spend:
   # test_cost_usd is a SIMULATED metric and is never compared against these.
 
 requests:
-  rate_per_minute: 18             # D-023: 18 leaves headroom under the 20/min cap
-  per_day: 1000                   # D-023, with >= $10 of credits purchased
+  # D-023: OpenRouter's :free tier. Applied only to models whose id ends in
+  # ":free" (D-062) -- a paid model has no 1000/day cap, and applying it anyway
+  # throttled paid runs by free-tier history in runs/.daily.json.
+  rate_per_minute: 18             # 18 leaves headroom under the 20/min cap
+  per_day: 1000                   # with >= $10 of credits purchased
+  # D-062: paid models. No daily request cap; the spend caps above are the guard.
+  paid_rate_per_minute: 60
   concurrency: 4                  # shares the bucket; the cap is per-account
 
 retries:
-  attempts: 3                     # Q-08
-  backoff_seconds: [1, 2, 4]
+  # Q-08, restored by D-059. Before it, this block was read by nothing:
+  # retrying was hard-coded, and a 401 or 429 was re-prompted as bad output.
+  content_attempts: 3             # repair prompts, for output that did not validate
+  transient_attempts: 5           # 429 / 5xx / connection / empty: back off, resend unchanged
+  timeout_retries: 2              # each timeout already cost a full timeout_seconds
+  backoff_base_s: 2               # 2, 4, 8, 16, 32 s (+/-20% jitter); Retry-After wins
+  backoff_cap_s: 60
   timeout_seconds: 120
-  # Retried: 429, 500, 502, 503, 504, connect/read timeouts. NOT 4xx otherwise.
+  # Never retried: 401 / 402 / 403 (auth, spend limit) and 400 / 404 / 422
+  # (model, provider or parameter not served). Both are run-fatal.
+
+guard:
+  # D-056: a proposed question is rejected as a repeat when its content words
+  # overlap an earlier question's by at least this much (overlap coefficient).
+  # Measured on the recorded runs: repeats 0.57-1.00, distinct questions <= 0.50.
+  question_repeat_overlap: 0.6667
