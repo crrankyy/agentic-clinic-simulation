@@ -488,6 +488,18 @@ def test_the_cli_probe_and_run_commands_import(tmp_path):
     assert result.exit_code == 0, result.output
 
 
+def test_play_builds_a_real_patient_without_crashing(cases, monkeypatch):
+    """`play` without --stub-patient referenced an undefined `budgets` and died
+    with a NameError before the first prompt. Quitting at once makes no call."""
+    from typer.testing import CliRunner
+
+    from agentclinic.cli import app
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-not-real")
+    result = CliRunner().invoke(app, ["play", "medqa-0002"], input="quit\n")
+    assert result.exit_code == 0, result.output
+
+
 def test_every_result_field_survives_the_csv_and_rejudge_round_trip(tmp_path):
     """The judge command copied a hand-kept list of fields; every field added
     later came back as its default -- "actions that produced nothing new: 0"

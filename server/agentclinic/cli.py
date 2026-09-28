@@ -124,7 +124,7 @@ def play(
         from .llm.factory import build_caller
 
         patient = Patient(store.patient_view(case_id),
-                          build_caller(load_models(), budgets, guards=None))
+                          build_caller(load_models(), load_budgets(), guards=None))
 
     graph = build_interactive_graph(
         patient=patient,
