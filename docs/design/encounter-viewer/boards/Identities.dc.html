@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Speaker identities and message types</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+body{margin:0;background:#F4F2EC;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1E1D1A}
+a{color:#23508F}a:hover{color:#163A6B}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1800px; box-sizing: border-box; padding: 56px 64px; display: flex; flex-direction: column; gap: 40px; background: #F4F2EC; overflow: hidden">
+
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 900px">
+<h1 style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 36px; font-weight: 600; letter-spacing: -0.01em">Eight speaker identities</h1>
+<p style="margin: 0; font-size: 15px; line-height: 1.55; color: #3A3832">Identity comes from the message type, never the sender field, so the Challenger and Cost steward always read as advisors. Each identity pairs a colour with a label, a glyph shape and a position in the transcript, so none depends on colour alone.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px">
+<sc-for list="{{ids}}" as="i" hint-placeholder-count="8">
+<div style="background: #FFFFFF; border: 1px solid #DDD9CF; border-radius: 8px; padding: 18px 18px 20px; display: flex; flex-direction: column; gap: 12px">
+<span style="display: flex; align-items: center; gap: 14px">
+<span style="display: flex; width: 26px; height: 26px; align-items: center; justify-content: center; flex-shrink: 0"><span style="display: block; {{i.big}}"></span></span>
+<span style="display: flex; flex-direction: column; gap: 1px"><span style="font-size: 16px; font-weight: 600; color: {{i.c}}">{{i.name}}</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52">{{i.c}} · {{i.shape}}</span></span>
+</span>
+<span style="font-size: 12.5px; line-height: 1.45; color: #1E1D1A"><span style="font-weight: 600">Position</span> · {{i.lane}}</span>
+<span style="font-size: 12.5px; line-height: 1.45; color: #5E5A52"><span style="font-weight: 600; color: #3A3832">Messages</span> · {{i.types}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h2 style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 24px; font-weight: 600">Every message type, as it renders</h2>
+<p style="margin: 0; font-size: 14px; color: #5E5A52">Label, optional tag line and text for each row of the message table. Gatekeeper results show the matched record and simulated test cost the API already carries.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px; align-items: start">
+<sc-for list="{{cols}}" as="col" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<sc-for list="{{col.items}}" as="m" hint-placeholder-count="10">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8C8678">{{m.note}}</span>
+<sc-if value="{{m.isRow}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; gap: 18px; padding: 6px 0; align-items: flex-start">
+<div style="width: 140px; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; padding-top: 5px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="display: block; flex-shrink: 0; {{m.gs}}"></span><span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span></span>
+<span style="padding-left: 20px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.35; color: #6B675E">{{m.tag}}</span>
+</div>
+<p style="margin: 0; flex-grow: 1; min-width: 0; {{m.ts}}">{{m.text}}</p>
+</div>
+</sc-if>
+<sc-if value="{{m.isRec}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; gap: 18px; padding: 6px 0; align-items: flex-start">
+<div style="width: 140px; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; padding-top: 5px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="display: block; flex-shrink: 0; {{m.gs}}"></span><span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span></span>
+<span style="padding-left: 20px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.35; color: #6B675E">{{m.tag}}</span>
+</div>
+<div style="flex-grow: 1; min-width: 0; background: #FFFFFF; border: 1px solid #D6D1C4">
+<sc-if value="{{m.hasRec}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; justify-content: space-between; gap: 12px; padding: 6px 14px; border-bottom: 1px solid #E6E2D8; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52"><span>record · {{m.rec}}</span><span>test cost {{m.cost}}</span></div>
+</sc-if>
+<p style="margin: 0; padding: 10px 14px 11px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-line; color: #1E1D1A">{{m.text}}</p>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{m.isDiff}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; gap: 18px; padding: 4px 0">
+<div style="width: 140px; flex-shrink: 0"></div>
+<p style="margin: 0; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 13px; color: #1E1D1A">
+<span style="display: block; width: 7px; height: 7px; border-radius: 50%; background: #23508F"></span>
+<span style="font-weight: 600; color: #23508F">Doctor</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6B675E">working differential</span>
+<span style="padding: 2px 9px; border: 1px solid #C9D3E3; border-radius: 999px; background: #FFFFFF">{{m.text}}</span>
+</p>
+</div>
+</sc-if>
+<sc-if value="{{m.isAdv}}" hint-placeholder-val="{{false}}">
+<div style="padding: 6px 0 6px 158px">
+<div style="border: 1.5px solid {{m.lc}}; border-radius: 14px; background: #FFFFFF; padding: 11px 16px 13px; display: flex; flex-direction: column; gap: 6px">
+<span style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<span style="display: block; flex-shrink: 0; {{m.gs}}"></span>
+<span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span>
+<span style="padding: 1px 7px; border: 1px solid {{m.lc}}; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: {{m.lc}}">advisor</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6B675E">{{m.tag}}</span>
+</span>
+<p style="margin: 0; font-size: 14.5px; line-height: 1.55; color: #1E1D1A">{{m.text}}</p>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{m.isSys}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 14px; padding: 10px 0">
+<span style="display: block; flex-grow: 1; min-width: 24px; height: 1px; background: #CFC9BB"></span>
+<span style="display: flex; align-items: center; gap: 9px; font-size: 13px; color: #3A3832"><span style="display: block; flex-shrink: 0; {{m.gs}}"></span><span style="font-weight: 600; color: {{m.lc}}; white-space: nowrap">{{m.lab}}</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px">{{m.text}}</span></span>
+<span style="display: block; flex-grow: 1; min-width: 24px; height: 1px; background: #CFC9BB"></span>
+</div>
+</sc-if>
+<sc-if value="{{m.isBand}}" hint-placeholder-val="{{false}}">
+<div style="padding: 6px 0">
+<div style="display: flex; gap: 18px; align-items: flex-start; padding: 10px 14px; border: {{m.bd}}; border-radius: 4px; background: {{m.bg}}">
+<span style="width: 126px; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="display: block; flex-shrink: 0; {{m.gs}}"></span><span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span></span>
+<span style="padding-left: 20px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6B675E">{{m.tag}}</span>
+</span>
+<p style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.55; color: #1E1D1A">{{m.text}}</p>
+</div>
+</div>
+</sc-if>
+</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const OCT = 'clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)';
+    const ID = {
+      doctor: { c: '#23508F', g: 'width:11px;height:11px;border-radius:50%;background:#23508F', big: 'width:22px;height:22px;border-radius:50%;background:#23508F' },
+      patient: { c: '#8A4F0E', g: 'width:11px;height:11px;border-radius:50%;border:2px solid #8A4F0E;box-sizing:border-box', big: 'width:22px;height:22px;border-radius:50%;border:3.5px solid #8A4F0E;box-sizing:border-box' },
+      gate: { c: '#3D4756', g: 'width:11px;height:11px;background:#3D4756', big: 'width:20px;height:20px;background:#3D4756' },
+      chall: { c: '#6E3591', g: 'width:9px;height:9px;margin:0 1px;background:#6E3591;transform:rotate(45deg)', big: 'width:16px;height:16px;background:#6E3591;transform:rotate(45deg)' },
+      cost: { c: '#1F6B5D', g: 'width:12px;height:11px;background:#1F6B5D;clip-path:polygon(50% 0,100% 100%,0 100%)', big: 'width:24px;height:21px;background:#1F6B5D;clip-path:polygon(50% 0,100% 100%,0 100%)' },
+      system: { c: '#5E5A52', g: 'width:12px;height:3px;background:#5E5A52', big: 'width:24px;height:5px;background:#5E5A52' },
+      alert: { c: '#A3221B', g: 'width:12px;height:12px;background:#A3221B;' + OCT, big: 'width:22px;height:22px;background:#A3221B;' + OCT },
+      guard: { c: '#6F6A5E', g: 'width:11px;height:11px;border:1.5px dashed #6F6A5E;box-sizing:border-box', big: 'width:20px;height:20px;border:2px dashed #6F6A5E;box-sizing:border-box' }
+    };
+    const ids = [
+      ['doctor', 'Doctor', 'filled circle', 'speaker column, serif text', 'asks, requests an exam, orders a test, working differential, red flag'],
+      ['patient', 'Patient', 'open ring', 'speaker column, italic serif text', 'answers, with a “doesn’t know” tag when it could not'],
+      ['gate', 'Gatekeeper', 'filled square', 'speaker column, square-cornered record box in mono', 'examination and test results, unavailable notice'],
+      ['chall', 'Challenger', 'diamond', 'inset under the text column, rounded box, advisor pill', 'argues against the leader, scheduled or before finalizing'],
+      ['cost', 'Cost steward', 'triangle', 'inset under the text column, rounded box, advisor pill', 'objects to a wasteful test'],
+      ['system', 'System', 'bar', 'full width between rules; the referral sits in the speaker column', 'referral, encounter ended, stop condition, budget'],
+      ['alert', 'Alert', 'octagon', 'full-width band, heavy solid border, tinted', 'provider error, parse failure'],
+      ['guard', 'Repeat guard', 'dashed square', 'full-width band, dashed border, no fill', 'repeat blocked, no turn used']
+    ].map((r) => ({ c: ID[r[0]].c, big: ID[r[0]].big, name: r[1], shape: r[2], lane: r[3], types: r[4] }));
+    const SERIF = "font-family:'Source Serif 4',Georgia,serif;font-size:16px;line-height:1.55;color:#1E1D1A";
+    const TS = { doctor: SERIF, patient: SERIF + ';font-style:italic', flag: SERIF + ';font-weight:600', system: 'font-size:14px;line-height:1.55;color:#3A3832', mono: "font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.55;color:#3A3832" };
+    const m = (note, k, id, lab, tag, text, x) => Object.assign({
+      note: note, isRow: k === 'row', isRec: k === 'rec', isDiff: k === 'diff', isAdv: k === 'adv', isSys: k === 'sys', isBand: k === 'band',
+      gs: ID[id].g, lc: ID[id].c, lab: lab, tag: tag, text: text, ts: TS[id] || TS.system, hasRec: false
+    }, x || {});
+    const a = [
+      m('Referral · first message', 'row', 'system', 'Referral', '', 'Evaluate and diagnose the patient presenting with a breast mass.'),
+      m('Doctor asks', 'row', 'doctor', 'Doctor', 'asks the patient', 'How old are you, and are you still having periods?'),
+      m('Patient answers', 'row', 'patient', 'Patient', "doesn't know", "I'm 48. I haven't been told where I am with menopause, so I don't know."),
+      m('Doctor requests an exam', 'row', 'doctor', 'Doctor', 'requests an exam', 'Breast examination (bilateral breasts and axillae)'),
+      m('Exam result', 'rec', 'gate', 'Examination', 'matched: contains', 'Breast Examination:\nInspection: No skin changes, nipple retraction, or discharge.\nPalpation: A 6-cm, nontender, multinodular mass in the upper outer quadrant of the left breast.', { hasRec: true, rec: 'Breast_Examination', cost: '$180.00' }),
+      m('Doctor orders a test', 'row', 'doctor', 'Doctor', 'orders a test', 'Ultrasound-guided core needle biopsy of the left breast mass'),
+      m('Test result', 'rec', 'gate', 'Test result', 'matched: contains', 'Biopsy:\nMicroscopic Description: Image shows leaf-like structures with stromal cellular overgrowth.', { hasRec: true, rec: 'Biopsy', cost: '$450.00' }),
+      m('Test not in the case', 'rec', 'gate', 'Test result', 'matched: unmatched', 'Not available for this patient. This investigation is not part of the case record at all, so rewording the request will not retrieve it.'),
+      m('Same record ordered again', 'rec', 'gate', 'Test result', 'matched: contains', 'This returns the same record already reported at turn 2. The case record holds nothing more specific for this request.', { hasRec: true, rec: 'Biopsy', cost: '$450.00' }),
+      m('Unavailable notice', 'row', 'gate', 'Gatekeeper', 'not available for this case', "requested 'CSF JC-virus PCR via lumbar puncture' is not in this case", { ts: TS.mono })
+    ];
+    const b = [
+      m("Doctor's working view · after every action", 'diff', 'doctor', 'Doctor', 'working differential', 'leading: Fibroadenoma'),
+      m('Red flag', 'row', 'doctor', 'Red flag', '', 'Natalizumab-associated PML: subacute progressive ataxia in an immunosuppressed patient demands urgent MRI and CSF testing.', { ts: TS.flag }),
+      m('Challenger · panel only', 'adv', 'chall', 'Challenger', 'argues against the leader · scheduled, every third turn', 'The imaging is not specific. Most dangerous unexcluded: Cerebral abscess (LESS likely than your leader)'),
+      m('Cost steward · panel only', 'adv', 'cost', 'Cost steward', '', 'Unlikely to change management at this stage.'),
+      m('Repeat blocked · no turn spent', 'band', 'guard', 'Repeat blocked', 'no turn used', 'blocked order_test: CSF JC virus PCR', { bd: '1.5px dashed #8C8678', bg: 'transparent' }),
+      m('Encounter ended', 'sys', 'system', 'Encounter ended', '', 'final: Phyllodes tumor of the breast'),
+      m('Stop condition', 'sys', 'system', 'Encounter ended', '', 'stop condition: turn_cap'),
+      m('Provider error · alert', 'band', 'alert', 'Provider error', '', 'provider unavailable in hypothesis: rate_limited', { bd: '2px solid #A3221B', bg: '#FBEFEC' }),
+      m('Parse failure · alert', 'band', 'alert', 'Parse failure', '', 'orchestrator: HypothesisUpdate did not validate after 3 attempts', { bd: '2px solid #A3221B', bg: '#FBEFEC' }),
+      m('Budget stop · system', 'sys', 'system', 'Budget', '', 'budget exhausted in hypothesis: case spend $0.5012 >= $0.5')
+    ];
+    return { ids: ids, cols: [{ items: a }, { items: b }] };
+  }
+}
+</script>
+</body>
+</html>

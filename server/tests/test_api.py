@@ -54,6 +54,13 @@ def test_to_wire_copies_only_named_fields():
     assert wire["meta"] == {"unknown": "False"}
 
 
+def test_a_blocked_repeat_names_its_action_but_not_the_guard_reason():
+    """The viewer tags a repeat-guard event with the action it blocked."""
+    event = Event(turn=4, kind="guard", actor="system", text="blocked order_test: CSF PCR",
+                  meta={"action": "order_test", "reason": "REPEAT_GUARD: already refused"})
+    assert to_wire(event, seq=9)["meta"] == {"action": "order_test"}
+
+
 def test_replay_and_live_produce_identical_payloads():
     """The client must not be able to tell a replay from a live run."""
     event = Event(turn=2, kind="test", actor="gatekeeper", text="WBC 14.2",
@@ -364,7 +371,7 @@ def _fake_run(root, name, cases, started, model="deepseek/deepseek-v4.1-flash"):
             {"ts": started, "kind": "event", "seq": 1, "turn": 1, "event_kind": "stop",
              "actor": "doctor", "text": "final: X", "meta": {}}]), encoding="utf-8")
     (d / "run.json").write_text(json.dumps({"config": "single_doctor", "model": model,
-                                            "started_utc": started}))
+                                            "started_utc": started, "max_turns": 12}))
     (d / "finals.json").write_text(json.dumps({c: {"diagnosis": "X"} for c in cases}))
     return d
 
@@ -379,6 +386,7 @@ def test_runs_come_back_latest_first_and_include_every_recorded_case(client, tmp
     assert [(r["run_id"], r["case_id"]) for r in rows] == [
         ("dev-single_doctor-new", "medqa-0013"), ("dev-single_doctor-new", "medqa-0031"),
         ("dev-single_doctor-old", "medqa-0009")]
+    assert {r["max_turns"] for r in rows} == {12}, "replays need it for 'turn 8 of 20'"
     body = client.get("/api/runs/dev-single_doctor-new/stream",
                       params={"case_id": "medqa-0031"}).text
     assert '"status": "finished"' in body

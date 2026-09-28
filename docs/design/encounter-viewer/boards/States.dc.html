@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Status, Start and ground-truth states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+body{margin:0;background:#F4F2EC;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1E1D1A}
+a{color:#23508F}a:hover{color:#163A6B}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1800px; box-sizing: border-box; padding: 56px 64px; display: flex; flex-direction: column; gap: 36px; background: #F4F2EC; overflow: hidden">
+
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 900px">
+<h1 style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 36px; font-weight: 600; letter-spacing: -0.01em">States</h1>
+<p style="margin: 0; font-size: 15px; line-height: 1.55; color: #3A3832">Every state pairs a glyph shape with a word, so it reads without colour. Failures say why in plain language; refusals sit next to the control they block.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 470px; gap: 48px; align-items: start">
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0 0 6px; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600">Status bar</h2>
+<sc-for list="{{bars}}" as="s" hint-placeholder-count="12">
+<sc-if value="{{s.isHead}}" hint-placeholder-val="{{false}}">
+<span style="padding: 12px 0 2px; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8C8678">{{s.text}}</span>
+</sc-if>
+<sc-if value="{{s.isBar}}" hint-placeholder-val="{{false}}">
+<div style="min-height: 46px; display: flex; align-items: center; gap: 14px; padding: 6px 20px; box-sizing: border-box; background: {{s.bg}}; border: {{s.bd}}; border-radius: 6px">
+<span style="display: flex; align-items: center; gap: 9px; flex-shrink: 0">
+<span style="display: block; flex-shrink: 0; {{s.g}}"></span>
+<span style="font-size: 14px; font-weight: 600; color: {{s.lc}}">{{s.label}}</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #3A3832">{{s.model}}</span>
+</span>
+<span style="font-size: 13px; line-height: 1.4; color: {{s.tc}}">{{s.text}}</span>
+<span style="margin-left: auto; flex-shrink: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #3A3832">{{s.count}}</span>
+</div>
+</sc-if>
+<sc-if value="{{s.isChips}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0 4px">
+<span style="font-size: 12.5px; color: #5E5A52; margin-right: 4px">Same pattern for the other stops:</span>
+<sc-for list="{{s.chips}}" as="c" hint-placeholder-count="5">
+<span style="display: flex; align-items: center; gap: 7px; padding: 4px 10px; border: 1px solid #D8C9A8; border-radius: 999px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3A3832"><span style="display: block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #7A4F00; box-sizing: border-box"></span>{{c}}</span>
+</sc-for>
+</div>
+</sc-if>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0 0 4px; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600">Header, key status</h2>
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #FBFAF7; border: 1px solid #DDD9CF; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #3A3832"><span style="padding: 2px 7px; border: 1px solid #CFC9BB; border-radius: 4px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #5E5A52">key</span><span>deepseek-v4.1-flash · paid · cap $0.5/case · $1.10 left on key</span></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #FBFAF7; border: 1px solid #DDD9CF; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #3A3832"><span style="padding: 2px 7px; border: 1px solid #CFC9BB; border-radius: 4px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #5E5A52">free</span><span>ling-3.0-flash-vl:free · 812/1000 requests left today</span></div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0 0 4px; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600">Start control and cost note</h2>
+<sc-for list="{{starts}}" as="v" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: #FBFAF7; border: 1px solid #DDD9CF; border-radius: 6px">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8C8678">{{v.name}}</span>
+<div style="display: flex; align-items: flex-start; gap: 12px">
+<button type="button" disabled="{{v.dis}}" style="height: 44px; flex-shrink: 0; padding: 0 18px; border: 0; border-radius: 6px; background: {{v.bb}}; color: {{v.bc}}; font-size: 14px; font-weight: 600; cursor: {{v.cur}}">Start encounter</button>
+<div style="flex-grow: 1; min-height: 44px; display: flex; align-items: flex-start; gap: 9px; padding: {{v.pad}}; border: {{v.nbd}}; border-radius: 6px; background: {{v.nbg}}; box-sizing: border-box">
+<sc-if value="{{v.hasG}}" hint-placeholder-val="{{false}}"><span style="display: block; flex-shrink: 0; margin-top: 3px; {{v.g}}"></span></sc-if>
+<span style="font-family: {{v.ff}}; font-size: 12.5px; line-height: 1.45; color: {{v.nc}}">{{v.note}}</span>
+</div>
+</div>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0 0 4px; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600">Final answer, abstained</h2>
+<section aria-label="Doctor's final answer" style="background: #FFFFFF; border: 1px solid #CFC9BB; border-radius: 8px; padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 12px">
+<span style="font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">Diagnosis</span>
+<span style="display: flex; align-items: baseline; gap: 12px"><span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 23px; font-style: italic; color: #5E5A52">(abstained)</span><span style="padding: 2px 8px; border: 1px dashed #8C8678; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #3A3832">abstained</span></span>
+<p style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 14.5px; line-height: 1.55">The imaging and history point to a demyelinating process, but the CSF JC-virus test is not in the case record, so the leader cannot be confirmed. Committing here would be a guess.</p>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+<li style="display: flex; gap: 8px"><span style="width: 14px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52">1</span><span style="flex-grow: 1">Progressive multifocal leukoencephalopathy</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">0.55</span></li>
+<li style="display: flex; gap: 8px"><span style="width: 14px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52">2</span><span style="flex-grow: 1">Multiple sclerosis relapse</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">0.25</span></li>
+<li style="display: flex; gap: 8px"><span style="width: 14px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52">3</span><span style="flex-grow: 1">Cerebral abscess</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">0.10</span></li>
+</ol>
+<p style="margin: 0; font-size: 12.5px; color: #3A3832"><span style="font-weight: 600">Red flags</span> · Natalizumab-associated PML, raised at turn 8</p>
+</section>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600">Ground truth panel · exists only after a run ends</h2>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: start">
+
+<section aria-label="Ground truth, hidden" style="background: #FFFFFF; border: 1.5px solid #1E1D1A; border-radius: 8px; padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px">
+<span style="display: flex; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase">Ground truth</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #5E5A52">hidden</span></span>
+<p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: #5E5A52">Held back until the encounter ends, and served on a separate channel that the transcript never touches.</p>
+<button type="button" style="height: 44px; border: 0; border-radius: 6px; background: #1E1D1A; color: #FBFAF7; font-size: 13.5px; font-weight: 600; cursor: pointer">Reveal the answer</button>
+</section>
+
+<section aria-label="Ground truth, revealed" style="background: #FFFFFF; border: 1.5px solid #1E1D1A; border-radius: 8px; padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px">
+<span style="display: flex; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase">Ground truth</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #5E5A52">revealed</span></span>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 11.5px; color: #5E5A52">Correct diagnosis</span><span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 21px; font-weight: 600">Phyllodes tumor</span></div>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 11.5px; color: #5E5A52">Doctor answered</span><span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 14.5px; color: #23508F">Phyllodes tumor of the breast</span></div>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #5E5A52">Ground truth from the benchmark. Not a clinical judgement.</p>
+<div style="display: flex; flex-direction: column; gap: 3px; padding-top: 10px; border-top: 1px solid #E6E2D8"><span style="font-size: 12px; font-weight: 600; color: #3A3832">Management and follow-up</span><span style="font-size: 12px; line-height: 1.45; color: #3A3832">[management text from the benchmark, when the case has it]</span></div>
+</section>
+
+<section aria-label="Ground truth, revealed with leak warning" style="background: #FFFFFF; border: 1.5px solid #1E1D1A; border-radius: 8px; padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px">
+<span style="display: flex; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase">Ground truth</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #5E5A52">revealed · leak</span></span>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 11.5px; color: #5E5A52">Correct diagnosis</span><span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 21px; font-weight: 600">Phyllodes tumor</span></div>
+<div role="alert" style="display: flex; gap: 10px; padding: 10px 12px; background: #FBF1DE; border: 1.5px solid #9A6A00; border-radius: 6px">
+<span aria-hidden="true" style="display: block; flex-shrink: 0; width: 13px; height: 12px; margin-top: 3px; background: #7A4F00; clip-path: polygon(50% 0, 100% 100%, 0 100%)"></span>
+<p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: #3D2A00">The benchmark embeds this diagnosis in the test results the gatekeeper returns, so a correct answer here is not evidence of reasoning.</p>
+</div>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #5E5A52">Ground truth from the benchmark. Not a clinical judgement.</p>
+</section>
+
+<section aria-label="Ground truth, reveal refused" style="background: #FFFFFF; border: 1.5px solid #1E1D1A; border-radius: 8px; padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px">
+<span style="display: flex; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase">Ground truth</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #5E5A52">refused</span></span>
+<p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: #5E5A52">Held back until the encounter ends, and served on a separate channel that the transcript never touches.</p>
+<div role="alert" style="display: flex; gap: 10px; padding: 10px 12px; background: #FBEFEC; border: 2px solid #A3221B; border-radius: 6px">
+<span aria-hidden="true" style="display: block; flex-shrink: 0; width: 12px; height: 12px; margin-top: 3px; background: #A3221B; clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%)"></span>
+<p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: #1E1D1A">Reveal refused: [reason from the server]</p>
+</div>
+<button type="button" style="height: 44px; border: 1px solid #1E1D1A; border-radius: 6px; background: #FFFFFF; color: #1E1D1A; font-size: 13.5px; font-weight: 600; cursor: pointer">Try again</button>
+</section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const OCT = 'clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)';
+    const G = {
+      idle: 'width:10px;height:10px;border-radius:50%;border:1.5px solid #6F6A5E;box-sizing:border-box',
+      run: 'width:10px;height:10px;border-radius:50%;background:#23508F;box-shadow:0 0 0 4px #D5DFEE',
+      replay: 'width:10px;height:11px;background:#23508F;clip-path:polygon(0 0,100% 50%,0 100%)',
+      done: 'width:10px;height:10px;border-radius:50%;background:#1E1D1A',
+      cap: 'width:11px;height:11px;border-radius:50%;border:2.5px solid #7A4F00;box-sizing:border-box',
+      fail: 'width:12px;height:12px;background:#A3221B;' + OCT,
+      inc: 'width:11px;height:11px;border-radius:50%;border:1.5px dashed #3A3832;box-sizing:border-box',
+      lost: 'width:11px;height:11px;border-radius:50%;border:2px solid #3A3832;border-right-color:transparent;box-sizing:border-box'
+    };
+    const PLAIN = { bg: '#FBFAF7', bd: '1px solid #DDD9CF', lc: '#1E1D1A', tc: '#5E5A52' };
+    const FAIL = { bg: '#FBEFEC', bd: '1.5px solid #A3221B', lc: '#7E1A14', tc: '#1E1D1A' };
+    const bar = (g, label, model, text, count, tone) => Object.assign({ isBar: true, g: G[g], label: label, model: model, text: text, count: count }, tone || PLAIN);
+    const head = (t) => ({ isHead: true, text: t });
+    const model = '· deepseek-v4.1-flash';
+    const reasons = [
+      'OpenRouter rejected the API key; replace it, or raise its spend limit.',
+      'The provider kept rate-limiting after every retry.',
+      'The provider kept timing out after every retry.',
+      'The provider kept returning server errors after every retry.',
+      'Could not connect to the provider.',
+      'The provider kept returning empty responses.',
+      'A spend or request cap was reached.',
+      'The encounter hit its wall-clock deadline.',
+      'OpenRouter could not serve this model/provider/parameter combination.'
+    ];
+    const bars = [
+      head('Before and during a stream'),
+      bar('idle', 'Idle', '', 'nothing loaded', ''),
+      bar('run', 'Running', model, 'live panel encounter on medqa-0002', 'turn 4 · 15 events'),
+      bar('replay', 'Replaying', model, 'replay of medqa-0009 · dev-single_doctor-befc79ba', 'turn 2 · 7 events'),
+      head('Ended'),
+      bar('done', 'Finished', model, 'panel encounter on medqa-0002', 'turn 6 · 23 events'),
+      bar('cap', 'Ended (turn_cap)', model, 'replay of medqa-0012', 'turn 20 · 68 events', { bg: '#FBF6EA', bd: '1.5px solid #B8923F', lc: '#5C3B00', tc: '#5E5A52' }),
+      { isChips: true, chips: ['Ended (no_new_actions)', 'Ended (budget_exhausted)', 'Ended (request_cap)', 'Ended (parse_failure)', 'Ended (provider_error)'] },
+      head('Failed · one plain-language reason each'),
+    ].concat(reasons.map((r) => bar('fail', 'Failed', '', r, '', FAIL))).concat([
+      head('Interrupted or refused'),
+      bar('inc', 'Incomplete', '', 'the run did not complete', 'turn 3 · 9 events'),
+      bar('lost', 'Connection lost', model, 'the transcript received so far stays on screen', 'turn 5 · 19 events'),
+      bar('fail', 'Refused', '', 'OpenRouter rejected the API key (401: User not found).', '', FAIL)
+    ]);
+    const TRI = 'width:13px;height:12px;background:#7A4F00;clip-path:polygon(50% 0,100% 100%,0 100%)';
+    const MONO = "'IBM Plex Mono', monospace";
+    const SANS = "'IBM Plex Sans', system-ui, sans-serif";
+    const on = { dis: false, bb: '#1E1D1A', bc: '#FBFAF7', cur: 'pointer' };
+    const off = { dis: true, bb: '#DDD9CF', bc: '#6F6A5E', cur: 'not-allowed' };
+    const starts = [
+      Object.assign({ name: 'Ready', note: 'worst case ~143 requests', ff: MONO, nc: '#5E5A52', nbg: 'transparent', nbd: '0', pad: '12px 0 0', hasG: false, g: '' }, on),
+      Object.assign({ name: 'Free tier · over allowance', note: "worst case ~143 requests, over today's allowance", ff: MONO, nc: '#3D2A00', nbg: '#FBF1DE', nbd: '1.5px solid #9A6A00', pad: '10px 12px', hasG: true, g: TRI }, off),
+      Object.assign({ name: 'Key rejected', note: 'Cannot start: OpenRouter rejected the API key (401: User not found).', ff: SANS, nc: '#1E1D1A', nbg: '#FBEFEC', nbd: '2px solid #A3221B', pad: '10px 12px', hasG: true, g: 'width:12px;height:12px;background:#A3221B;' + OCT }, off),
+      Object.assign({ name: 'A stream is playing', note: 'A run is streaming. Start and Replay open again when it ends.', ff: SANS, nc: '#3A3832', nbg: 'transparent', nbd: '0', pad: '4px 0 0', hasG: false, g: '' }, off)
+    ];
+    return { bars: bars, starts: starts };
+  }
+}
+</script>
+</body>
+</html>

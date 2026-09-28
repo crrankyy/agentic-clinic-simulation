@@ -1293,3 +1293,27 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
     `uvicorn` (drops httptools, uvloop, watchfiles and python-dotenv).
 - **Kept on purpose:** the isolation machinery (views, subgraph schemas, the
   wire whitelist, `STATE_SOURCES`), which the brief requires.
+
+## D-065 — The viewer follows the design handoff; two fields added to the API
+
+- **Date:** 2026-09-28
+- **Question:** The user produced a redesign of the encounter viewer in Claude
+  Design and asked for it to be implemented from the handoff in
+  `docs/design/encounter-viewer/`.
+- **Decision:** `client/` is rewritten to `SPEC.md`: its tokens, layout,
+  eight identities keyed off `kind`, message templates, status states, replay
+  list, turn index and ground-truth panel. Still no framework or build step.
+  Light theme and desktop only, at the user's direction. The six rules in
+  SPEC §2 are kept, above all that the ground-truth panel does not exist in the
+  DOM until the stream's `status` event arrives and the reveal is fetched only
+  on click.
+- **Server changes, approved by the user:** the browser field list
+  (`api/wire.py`) now passes a repeat-guard event's `action`, so the viewer can
+  tag which action was blocked. The guard's `reason` stays server-side. Rows
+  from `/api/runs` carry `max_turns` from `run.json`, for "Turn 8 of 20" on a
+  replay. Runs recorded before `run.json` existed have no `max_turns`, and the
+  viewer omits "of N" for them rather than guess.
+- **Where the handoff was silent or inconsistent, the boards win:** a finished
+  run's status line names the case, run and provider; a record that matched
+  nothing has no header strip even though its cost is charged; a failed run
+  still gets the ground-truth panel once its status arrives.
