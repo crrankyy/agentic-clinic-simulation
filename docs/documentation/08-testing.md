@@ -1,12 +1,12 @@
 # 8. Testing
 
 ```bash
-uv run pytest                    # 266 tests, ~13s, zero network access
+uv run pytest                    # 264 tests, ~20s, zero network access
 uv run pytest -m live            # deselected by default; touches real APIs
 ```
 
 **No test in the default run touches the network.** The preflight's HTTP calls
-are mocked with `respx`, and the web tests install a stub preflight. Graph tests drive
+are answered by an `httpx.MockTransport`, and the web tests install a stub preflight. Graph tests drive
 `FakeChatModel`, which replays a scripted list of structured outputs and records
 `rendered_prompts` — which is how the isolation tests work: they assert on what a
 node *actually sent*, not on what it was supposed to send.
@@ -16,15 +16,15 @@ node *actually sent*, not on what it was supposed to send.
 | `test_sim_fixes.py` | 31 (+ parametrised) | The 2026-09-27 review: repeat guard, failure handling, gatekeeper, patient, preflight |
 | `test_gatekeeper.py` | 19 | The matching cascade — the hardest non-LLM problem here |
 | `test_panel.py` | 17 | Panel scheduling, advisory semantics, subgraph boundaries |
-| `test_runner.py` | 17 | Outcome mapping, crash containment, judging, rebuild |
+| `test_runner.py` | 16 | Outcome mapping, crash containment, judging, rebuild |
 | `test_api.py` | 17 | The web surface, with isolation as the main subject |
 | `test_download_dataset.py` | 14 | Checksums, atomicity, idempotency |
 | `test_routing.py` | 13 | Every action, `RoutingError`, disabled-action repair |
 | `test_single_doctor.py` | 13 | End-to-end encounters, caps, isolation |
-| `test_metrics.py` | 12 | n=0 and n=1, paired bootstrap, calibration |
+| `test_metrics.py` | 9 | n=0 and n=1, Wilson interval, calibration |
 | `test_leakage.py` | 11 | The leak rule, in **both** directions |
 | `test_loader.py`, `test_splits.py` | 20 | Irregular shapes, determinism |
-| `test_config.py` | 11 | Resolved configuration, derived values |
+| `test_config.py` | 10 | Resolved configuration, derived values |
 | `test_views.py` | 8 | Isolation at the view layer |
 | `test_interactive.py` | 8 | `interrupt()` / resume |
 | `test_guards.py` | 7 | Rate, daily, spend |

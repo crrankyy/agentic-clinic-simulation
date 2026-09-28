@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from ..agents.gatekeeper import Gatekeeper
 from .guarding import budget_guarded
+from .ledger import build_ledger
 from .routing import check_stop
 from .state import EncounterState, Event
 
@@ -68,18 +69,9 @@ def make_ask_patient(patient: Any, case_id: str) -> Callable:
 
 def delivered_keys(log: list[Event], kind: str) -> dict[str, int]:
     """Keys already returned in this encounter, with the turn each first arrived."""
-    out: dict[str, int] = {}
-    for e in log:
-        if e.actor != "gatekeeper" or e.kind != kind:
-            continue
-        meta = e.meta or {}
-        key = meta.get("key")
-        if meta.get("tier") in (None, "", "unmatched") or key in (None, "", "None"):
-            continue
-        if meta.get("outcome") == "repeat":
-            continue
-        out.setdefault(key, e.turn)
-    return out
+    # Reversed, so the earliest turn is the one left in the dict.
+    return {e.key: e.turn for e in reversed(build_ledger(log))
+            if e.kind == kind and e.key and e.outcome in ("result", "partial")}
 
 
 def make_gatekeeper_node(gatekeeper: Gatekeeper, domain: str, kind: str) -> Callable:
@@ -107,24 +99,6 @@ def make_gatekeeper_node(gatekeeper: Gatekeeper, domain: str, kind: str) -> Call
         return {"encounter_log": events, "test_cost_usd": reply.cost_usd, **_CLEARS}
 
     return budget_guarded(node, channel="encounter_log")
-
-
-def make_search_literature(evidence: Any, case_id: str) -> Callable:
-    """Placeholder until Phase 5. Never wired unless the action is enabled."""
-
-    async def search_literature(state: EncounterState) -> dict[str, Any]:
-        query = state.get("action_argument") or ""
-        turn = int(state.get("turn", 0)) + 1
-        text = await evidence.search(query, case_id=case_id)
-        return {
-            "encounter_log": [
-                Event(turn=turn, kind="literature", actor="doctor", text=query),
-                Event(turn=turn, kind="literature", actor="evidence", text=text),
-            ],
-            **_CLEARS,
-        }
-
-    return budget_guarded(search_literature, channel="encounter_log")
 
 
 def make_check_stop(max_turns: int, guards: Any = None) -> Callable:

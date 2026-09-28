@@ -32,9 +32,10 @@ def test_none_action_raises():
 
 
 def test_disabled_but_valid_action_raises():
-    """`search_literature` before the evidence agent exists."""
-    with pytest.raises(RoutingError, match="search_literature"):
-        route_action(state(action="search_literature"), enabled=ENABLED, has_challenger=False)
+    """A real action this run did not enable is not routed."""
+    with pytest.raises(RoutingError, match="order_test"):
+        route_action(state(action="order_test"), enabled=frozenset({"ask_patient"}),
+                     has_challenger=False)
 
 
 def test_budget_exhausted_short_circuits_everything():

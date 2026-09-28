@@ -9,13 +9,12 @@ process, so the $0.50 per-case cap became a lifetime cap per case id (M-35).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from ..config import Budgets, ModelConfig
+from ..config import Budgets, ModelConfig, RoleSettings
 from .guards import DailyRequestCounter, RunGuards, SpendTracker, TokenBucket
-from .openrouter import NODE_ROLE, LLMCaller, build_chat_model
+from .openrouter import LLMCaller, build_chat_model
 
 
 def build_caller(
@@ -27,37 +26,27 @@ def build_caller(
     pin_override: list[str] | None = None,
     unpinned: bool = False,
 ) -> LLMCaller:
-    """One chat model per distinct (model, max_tokens, reasoning); one caller."""
+    """One chat model per role with its own settings; `default` serves the rest."""
     pin = None if unpinned else (pin_override or models.provider.pin)
-    built: dict[tuple[str, int | None, str], Any] = {}
-    role_models: dict[str, Any] = {}
-    for role in sorted(set(NODE_ROLE.values())):
-        model_id = models.roles.get(role) or models.for_role("orchestrator")
-        st = models.settings_for(role)
-        sig = (model_id, st.max_tokens, json.dumps(st.reasoning, sort_keys=True))
-        if sig not in built:
-            built[sig] = build_chat_model(
-                model=model_id,
-                pin_provider=pin,
-                allow_fallbacks=models.provider.allow_fallbacks,
-                attribution_title=models.provider.attribution_title,
-                timeout=budgets.timeout_seconds,
-                # 0: LLMCaller owns retries. SDK-internal retries would multiply
-                # the wall-clock deadline by (max_retries + 1) invisibly.
-                max_retries=0,
-                max_tokens=st.max_tokens,
-                reasoning=st.reasoning,
-                require_parameters=models.provider.require_parameters,
-            )
-        role_models[role] = built[sig]
+
+    def chat(st: RoleSettings) -> Any:
+        return build_chat_model(
+            model=models.model, pin_provider=pin,
+            allow_fallbacks=models.provider.allow_fallbacks,
+            attribution_title=models.provider.attribution_title,
+            timeout=budgets.timeout_seconds,
+            max_tokens=st.max_tokens, reasoning=st.reasoning,
+        )
+
     return LLMCaller(
-        role_models["orchestrator"],
+        chat(models.settings_for("default")),
         guards=guards,
         tracer=tracer,
         structured_method=models.structured_output_method,
         call_timeout=budgets.timeout_seconds,
-        role_models=role_models,
-        retry=budgets.retry_policy(),
+        role_models={role: chat(st) for role, st in models.role_settings.items()
+                     if role != "default"},
+        retry=budgets.retry,
     )
 
 

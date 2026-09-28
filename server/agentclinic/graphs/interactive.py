@@ -23,9 +23,8 @@ from .nodes import make_ask_patient, make_check_stop, make_gatekeeper_node
 from .routing import route_action, route_stop
 from .state import EncounterState, Event
 
-#: Actions a human doctor can take in Phase 2. `search_literature` arrives with
-#: the evidence agent in Phase 5; per PLAN.md §4.1 the action set is built per
-#: run, so it is simply absent here rather than present-but-broken.
+#: Actions a human doctor can take. Per PLAN.md §4.1 the action set is built
+#: per run.
 INTERACTIVE_ACTIONS = frozenset({"ask_patient", "request_exam", "order_test"})
 
 
@@ -44,9 +43,6 @@ def build_interactive_graph(
     nothing case-related travels through `config`, which LangGraph would record
     in checkpoint metadata.
     """
-
-    def brief(state: EncounterState) -> dict[str, Any]:
-        return {}  # `new_state` already seeded the objective
 
     def human_orchestrator(state: EncounterState) -> dict[str, Any]:
         """Hand control to the human and wait for their chosen action."""
@@ -75,7 +71,6 @@ def build_interactive_graph(
         return update
 
     graph = StateGraph(EncounterState)
-    graph.add_node("brief", brief)
     graph.add_node("orchestrator", human_orchestrator)
     graph.add_node("ask_patient", make_ask_patient(patient, case_id))
     graph.add_node("request_exam", make_gatekeeper_node(gatekeeper, "exams", "exam"))
@@ -83,8 +78,7 @@ def build_interactive_graph(
     graph.add_node("check_stop", stop_node)
     graph.add_node("finalize", finalize)
 
-    graph.add_edge(START, "brief")
-    graph.add_edge("brief", "orchestrator")
+    graph.add_edge(START, "orchestrator")
     graph.add_conditional_edges(
         "orchestrator",
         lambda s: route_action(s, enabled=enabled, has_challenger=False),

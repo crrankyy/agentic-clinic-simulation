@@ -20,14 +20,13 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from ..config import ModelConfig
-
-BASE = "https://openrouter.ai/api/v1"
+from .openrouter import OPENROUTER_BASE_URL as BASE
 
 
 @dataclass
@@ -40,14 +39,11 @@ class PreflightResult:
     key_limit_remaining: float | None = None
     providers: list[str] = field(default_factory=list)
 
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
 
 async def preflight(models: ModelConfig, *, api_key: str | None = None,
                     client: httpx.AsyncClient | None = None,
                     timeout: float = 10.0, routing: bool = False) -> PreflightResult:
-    model = models.for_role("orchestrator")
+    model = models.model
     pin = list(models.provider.pin)
     base = PreflightResult(ok=False, reason="", model=model, pin=pin, free_tier=models.is_free)
     key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")

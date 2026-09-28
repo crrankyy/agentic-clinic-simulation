@@ -68,16 +68,19 @@ async def test_leaf_request_matches_its_parent(store, costs, by_line):
 async def test_ambiguous_leaf_is_not_answered_without_disambiguation(store, costs, by_line):
     """WBC sits under both CBC and Urinalysis in case 10 (D-035)."""
     m = await gk(store, costs, by_line[10].case_id).match("WBC")
-    assert m.tier == "unmatched"
-    assert set(m.candidates) == {"Complete_Blood_Count", "Urinalysis"}
+    assert m.tier == "unmatched" and m.key is None
 
 
 async def test_ambiguous_leaf_returns_exactly_one_panel_when_disambiguated(store, costs, by_line):
+    offered = []
+
     async def choose(request, candidates):
+        offered.append(set(candidates))
         return "Complete_Blood_Count"
 
     m = await gk(store, costs, by_line[10].case_id, llm=choose).match("WBC")
     assert m.tier == "llm_disambiguated" and m.key == "Complete_Blood_Count"
+    assert offered == [{"Complete_Blood_Count", "Urinalysis"}], "both parents, and only them"
     # Never both: returning the urinalysis would disclose a test never ordered.
     assert "Urinalysis" not in str(m.payload)
 

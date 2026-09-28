@@ -64,30 +64,32 @@ talking to itself — the web client keys off `kind` for exactly this reason.
 
 ## Three graphs
 
-### `single_doctor`
+### `single_doctor` and `panel` — one builder, `graphs/encounter.py`
 
 ```
-START → brief → hypothesis → solo_decide → absorb_panel → route_action
-          ↑                                                    ↓
-          └──────────── route_stop ← check_stop ← action ──────┘
-                              ↓
-                           finalize → END
+START → hypothesis → decide → absorb_panel → route_action
+          ↑                                       ↓
+          └────── route_stop ← check_stop ← action ┘
+                      ↓ (turn cap: hypothesis_final first)
+                   finalize → END
 ```
 
-`solo_decide` is a subgraph containing only the orchestrator. It exists so the
-two configurations differ by exactly two nodes, and so the orchestrator sits
-behind a schema boundary in **both**.
+`build_graph(..., panel=False)` builds both configurations (D-064). `decide` is
+a subgraph: for the single doctor it contains only the orchestrator
+(`build_solo_decide`), for the panel it is the doctor panel below. Both use the
+panel's boundary schemas, so the orchestrator sits behind a schema boundary in
+**both**, and the configurations differ by exactly two things: the `decide`
+subgraph and `challenger_final` on the voluntary finalize path.
+`build_case_graph` wires the patient, gatekeeper and decision model for one
+case, and is what the CLI and the web engine both call.
 
-### `panel` — `graphs/encounter.py` + `graphs/doctor_panel.py`
+### The panel's `decide` — `graphs/doctor_panel.py`
 
 ```
 challenge_due? ──yes──> challenger ──> orchestrator ──> order_test? ──yes──> cost_steward
       │                                     │                │                     │
       └──no─────────────────────────────────┘                └──no──> END <────────┘
 ```
-
-Structurally identical to `single_doctor` except the decision subgraph, plus
-`challenger_final` on the voluntary finalize path.
 
 Three properties, each an adversarial review finding:
 
@@ -180,8 +182,9 @@ was recorded as a crash — c79bb4e6 died at turn 6 with the answer in hand.
 Auth and config failures are deliberately **not** caught: they are run-fatal,
 and the runner aborts the evaluation on them rather than crashing each case.
 
-`on_content_failure=False` is for the advisory sub-roles, which degrade to "no
-opinion" (D-049) instead of ending the encounter. `channel` is a required
+`degrade_keys=(...)` is for the advisory sub-roles: a `StructuredOutputFailed`
+sets their opinion keys to `None` — "no opinion" (D-049) — and adds to
+`parse_failures` instead of ending the encounter. `channel` is a required
 argument: a node inside the decision subgraph cannot write `encounter_log`.
 
 > A Phase 3 review blocker: the decorator once covered **2 of 8** LLM nodes.

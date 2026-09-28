@@ -68,9 +68,10 @@ there is not evidence of reasoning.
 SERVED_CASES = ("medqa-0002", "medqa-0009", "medqa-0012")
 ```
 
-Verified against `select_eval_subset` **at call time**, not hardcoded and
-trusted. If the dev subset ever changes, the app raises rather than quietly
-serving different cases than the runs it is compared against. An unserved case
+A test asserts this equals what `select_eval_subset` chooses, so if the dev
+subset ever changes the suite fails rather than the app quietly serving
+different cases than the runs it is compared against. (It used to re-derive the
+split on every request; D-064 moved the check into the test.) An unserved case
 is a **404, never a substitution**.
 
 ### Pre-flight
@@ -125,10 +126,11 @@ no API allowance. This is the mode to use while working on the UI.
 you ran most recently; beneath it, that model's runs are listed newest first,
 each run grouped with its cases and their outcome. Any case with a recorded
 transcript replays — a 10-case run shows all ten — while starting a *live*
-encounter stays limited to the three served cases. Each run's model comes from
-`run.json`, written when the run starts; older runs fall back to the model the
-provider reported on their calls, then to the report, and otherwise say
-"model not recorded" rather than guess. `run_id` and `case_id` reach file
+encounter stays limited to the three served cases. Each run's model, config and start
+time come from `run.json`, written when the run starts; a run without one says
+"model not recorded" rather than guess. A CLI run's stop reason is the runner's
+`case_end` trace record. (Older runs were backfilled with these files once, so
+the fallbacks that read them were removed in D-064.) `run_id` and `case_id` reach file
 paths, so both are validated: a run must be a direct child of `runs/`, and a
 case must have a trace in that run.
 

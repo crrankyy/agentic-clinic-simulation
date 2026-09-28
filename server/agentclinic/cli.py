@@ -74,8 +74,8 @@ def config() -> None:
     m, b, c = load_models(), load_budgets(), load_test_costs()
     t = Table(title="resolved config")
     t.add_column("setting"); t.add_column("value", justify="right")
-    t.add_row("agent model (all roles)", m.for_role("patient"))
-    t.add_row("judge", f"{m.judge.sdk}:{m.judge.model} (max {m.judge.max_calls_per_run}/run)")
+    t.add_row("agent model (all roles)", m.model)
+    t.add_row("judge", f"{m.judge.model} (max {m.judge.max_calls_per_run}/run)")
     t.add_row("provider pin", f"{m.provider.pin} fallbacks={m.provider.allow_fallbacks}")
     t.add_row("max turns", str(b.max_turns))
     t.add_row("recursion limit (derived)", str(b.recursion_limit))
@@ -184,17 +184,13 @@ def run(
     import json
     import uuid
 
-    from .agents.gatekeeper import Gatekeeper, make_llm_disambiguator
     from .agents.judge import Judge
-    from .agents.patient import Patient
     from .config import load_budgets, load_dotenv, load_models, load_test_costs
     from .data.splits import select_eval_subset
     from .data.views import CaseStore
     from .eval.report import RunMetadata, render, write_report
     from .eval.runner import run_evaluation, write_finals, write_results_csv
-    from .graphs.schemas import make_orchestrator_decision
-    from .graphs.encounter import build_encounter_graph
-    from .graphs.single_doctor import build_single_doctor_graph
+    from .graphs.encounter import ENABLED_ACTIONS, build_case_graph
     from .llm.openrouter import MissingCredentials
     from .tracing import Tracer
 
@@ -268,8 +264,6 @@ def run(
         console.print(f"paid model: no request allowance; spend capped at "
                       f"${budgets.spend_per_case_usd}/case, ${budgets.spend_per_run_usd}/run")
 
-    enabled = frozenset({"ask_patient", "request_exam", "order_test"})
-    decision_model = make_orchestrator_decision(enabled)
     try:
         caller = build_caller(models, budgets, guards=guards, tracer=tracer,
                               unpinned=bool(cache and no_report))
@@ -282,22 +276,9 @@ def run(
                   require_subscription=models.judge.auth == "subscription")
 
     def build_graph(case_id: str) -> Any:
-        shared = dict(
-            caller=caller,
-            patient=Patient(store.patient_view(case_id), caller),
-            gatekeeper=Gatekeeper(
-                store.gatekeeper_view(case_id), costs,
-                # Without this the cascade stops at exact/contains/synonyms, and
-                # anything else becomes a fabricated "not available".
-                llm_disambiguate=make_llm_disambiguator(caller, case_id),
-            ),
-            case_id=case_id, decision_model=decision_model, enabled=enabled,
-            max_turns=budgets.max_turns, guards=guards,
-            question_overlap=budgets.question_repeat_overlap,
-        )
-        if config == "panel":
-            return build_encounter_graph(costs=costs, **shared)
-        return build_single_doctor_graph(**shared)
+        return build_case_graph(store, case_id, config=config, caller=caller, guards=guards,
+                                costs=costs, max_turns=budgets.max_turns,
+                                question_overlap=budgets.question_repeat_overlap)
 
     finals: dict[str, Any] = {}
     results = asyncio.run(run_evaluation(
@@ -320,11 +301,12 @@ def run(
         return
 
     meta = RunMetadata(
-        run_id=run_id, config_name=config, model=models.for_role("orchestrator"),
+        run_id=run_id, config_name=config, model=models.model,
         judge_model=models.judge.model,
         provider_pin=",".join(models.provider.pin),
         fallbacks=models.provider.allow_fallbacks, cache_enabled=cache,
-        structured_output_mode=models.structured_output_method, enabled_actions=tuple(sorted(enabled)),
+        structured_output_mode=models.structured_output_method,
+        enabled_actions=tuple(sorted(ENABLED_ACTIONS)),
         max_turns=budgets.max_turns, split=split,
     )
     write_report(render(results, meta), run_dir / "report.md")
@@ -350,12 +332,12 @@ def judge(
     import csv
     import json
 
-    from .agents.judge import Judge, top_k
+    from .agents.judge import Judge
     from .config import load_models
     from .data.views import CaseStore
     from .eval.report import RunMetadata, render, write_report
-    from .eval.runner import CaseResult, write_results_csv
-    from .graphs.schemas import FinalAnswer
+    from .eval.runner import CaseResult, apply_verdict, result_from_row, write_results_csv
+    from .graphs.schemas import FinalAnswer, JudgeVerdict
     from .tracing import Tracer
 
     run_dir = ROOT / "runs" / run_id
@@ -393,73 +375,36 @@ def judge(
     if not manual:
         console.print(f"[dim]judge auth: {judge_agent.auth_mode()}[/dim]")
 
-    def as_bool(value: Any) -> bool:
-        """Rows come from a CSV (strings) or from `rebuild_results` (real types)."""
-        if isinstance(value, bool):
-            return value
-        return str(value or "").strip().lower() in {"true", "1", "yes"}
-
-    from .eval.runner import result_from_row
-
     async def main() -> list[CaseResult]:
         out: list[CaseResult] = []
         for row in rows:
             # Every field, coerced by its declared type (result_from_row).
             r = result_from_row(row)
-            if "behaviour_recovered" not in row:
-                # Absent from CSVs written before D-051; those runs were
-                # measured live, so a missing column means True.
-                r.behaviour_recovered = True
-
+            out.append(r)
             answer = finals.get(r.case_id)
             if answer is None or r.abstained:
                 # An abstention is never judged (D-028), and a crash left no answer.
-                out.append(r)
                 continue
             final = FinalAnswer.model_validate(answer)
             if r.case_id in manual:
-                from .graphs.schemas import JudgeVerdict
-
                 verdict = JudgeVerdict.model_validate(manual[r.case_id])
                 tracer.judge(case_id=r.case_id, source="manual",
                              match_type=verdict.match_type, correct=verdict.correct,
                              reasoning=verdict.reasoning)
-                r.outcome = "scored"
-                r.diagnosis = final.diagnosis
-                r.differential = [d.diagnosis for d in final.differential]
-                r.match_type = verdict.match_type
-                r.judge_correct = verdict.correct
-                r.lenient_correct = verdict.lenient_correct
-                r.top_1, r.top_3, r.top_5 = (top_k(verdict, 1), top_k(verdict, 3),
-                                             top_k(verdict, 5))
-                r.in_differential = any(verdict.entry_matches)
-                console.print(f"  {r.case_id}  {verdict.match_type:9s} "
-                              f"correct={verdict.correct} top1={r.top_1}  [dim](manual)[/dim]")
-                out.append(r)
-                continue
-            try:
-                verdict = await judge_agent.verdict(
-                    case_id=r.case_id, final=final, view=store.judge_view(r.case_id))
-            except Exception as exc:  # noqa: BLE001
-                r.outcome = "error"
-                r.error = f"judge failed: {type(exc).__name__}"
-                tracer.judge(case_id=r.case_id, event="judge_error",
-                             error_type=type(exc).__name__, error_message=str(exc)[:500])
-                console.print(f"  {r.case_id}  [red]judge failed: {type(exc).__name__}[/red]")
-                out.append(r)
-                continue
-            r.outcome = "scored"
-            r.error = None
-            r.diagnosis = final.diagnosis
-            r.differential = [d.diagnosis for d in final.differential]
-            r.match_type = verdict.match_type
-            r.judge_correct = verdict.correct
-            r.lenient_correct = verdict.lenient_correct
-            r.top_1, r.top_3, r.top_5 = top_k(verdict, 1), top_k(verdict, 3), top_k(verdict, 5)
-            r.in_differential = any(verdict.entry_matches)
-            console.print(f"  {r.case_id}  {verdict.match_type:9s} "
-                          f"correct={verdict.correct} top1={r.top_1}")
-            out.append(r)
+            else:
+                try:
+                    verdict = await judge_agent.verdict(
+                        case_id=r.case_id, final=final, view=store.judge_view(r.case_id))
+                except Exception as exc:  # noqa: BLE001
+                    r.outcome = "error"
+                    r.error = f"judge failed: {type(exc).__name__}"
+                    tracer.judge(case_id=r.case_id, event="judge_error",
+                                 error_type=type(exc).__name__, error_message=str(exc)[:500])
+                    console.print(f"  {r.case_id}  [red]judge failed: {type(exc).__name__}[/red]")
+                    continue
+            apply_verdict(r, final, verdict)
+            console.print(f"  {r.case_id}  {verdict.match_type:9s} correct={verdict.correct} "
+                          f"top1={r.top_1}" + ("  [dim](manual)[/dim]" if r.case_id in manual else ""))
         return out
 
     results = asyncio.run(main())
@@ -469,7 +414,7 @@ def judge(
     parts = run_id.split("-")
     config_name = parts[1] if len(parts) > 2 else "single_doctor"
     meta = RunMetadata(
-        run_id=run_id, config_name=config_name, model=models.for_role("orchestrator"),
+        run_id=run_id, config_name=config_name, model=models.model,
         judge_model=("manual (hand-assigned, not a model)" if manual
                      else models.judge.model),
         provider_pin=",".join(models.provider.pin),
@@ -547,7 +492,7 @@ def probe(
     decision = make_orchestrator_decision(frozenset({"ask_patient", "order_test"}))
     for provider in candidates:
         caller = build_caller(models, budgets, guards=None, pin_override=[provider])
-        console.print(f"\n[bold]{models.for_role('orchestrator')} @ {provider}[/bold]")
+        console.print(f"\n[bold]{models.model} @ {provider}[/bold]")
         for label, schema, node, extra in (
             ("HypothesisUpdate (nested)", HypothesisUpdate, "hypothesis", ""),
             ("OrchestratorDecision", decision, "orchestrator",

@@ -21,7 +21,7 @@ from .leakage import dx_in_results, dx_tokens_in_results
 from .models import Case
 
 MEDQA_EXTENDED = "agentclinic_medqa_extended.jsonl"
-EXPECTED_CASES = {MEDQA_EXTENDED: 214, "agentclinic_medqa.jsonl": 107}
+EXPECTED_CASES = {MEDQA_EXTENDED: 214}
 
 
 class DatasetLoadError(RuntimeError):

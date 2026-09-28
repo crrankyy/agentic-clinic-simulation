@@ -12,8 +12,6 @@ on every subsequent turn.
 
 from __future__ import annotations
 
-import functools
-from pathlib import Path
 from typing import Any, Callable
 
 from ..config import CONFIG_DIR
@@ -44,8 +42,8 @@ from ..llm.openrouter import GUARD_MARKER, ProviderUnavailable, StructuredOutput
 SUMMARY_FIELD_CHARS = 2000
 
 
-def _prompt(name: str, config_dir: Path | None = None) -> str:
-    return (config_dir or CONFIG_DIR).joinpath("prompts", name).read_text(encoding="utf-8")
+def _prompt(name: str) -> str:
+    return CONFIG_DIR.joinpath("prompts", name).read_text(encoding="utf-8")
 
 
 def render_differential(items: list[DifferentialItem]) -> str:
@@ -111,9 +109,9 @@ def truncate_field(values: list[str], limit: int = SUMMARY_FIELD_CHARS) -> tuple
     return kept, dropped
 
 
-def make_hypothesis_node(caller: Any, case_id: str, config_dir: Path | None = None) -> Callable:
+def make_hypothesis_node(caller: Any, case_id: str) -> Callable:
     """Build the node that maintains the differential and the summary."""
-    template = _prompt("hypothesis.md", config_dir)
+    template = _prompt("hypothesis.md")
 
     async def hypothesis(state: dict[str, Any]) -> dict[str, Any]:
         log: list[Event] = state.get("encounter_log", [])
@@ -192,21 +190,18 @@ _LIKELIHOOD = {
 
 
 #: One line per action, rendered from the run's enabled set. orchestrator.md
-#: used to list `search_literature` in runs where it was disabled -- the model
-#: would be right to pick it, and the schema would reject it (M-45).
+#: used to list an action in runs where it was disabled -- the model would be
+#: right to pick it, and the schema would reject it (M-45).
 ACTION_TEXT = {
     "ask_patient": "`ask_patient` — put a question to the patient. `argument` is the question.",
     "request_exam": ("`request_exam` — request a physical examination. `argument` names "
                      "the region or examination."),
     "order_test": "`order_test` — order an investigation. `argument` names the test.",
-    "search_literature": "`search_literature` — consult the literature. `argument` is the query.",
 }
-_ACTION_ORDER = ("ask_patient", "request_exam", "order_test", "search_literature")
 
 
 def render_actions(enabled: frozenset[str] | None) -> str:
-    names = [a for a in _ACTION_ORDER if enabled is None or a in enabled]
-    lines = [f"- {ACTION_TEXT[a]}" for a in names]
+    lines = [f"- {text}" for a, text in ACTION_TEXT.items() if enabled is None or a in enabled]
     lines.append("- `finalize` — commit to a diagnosis. Choose this when further "
                  "information is unlikely to change your answer, or when you have "
                  "what you need.")
@@ -214,8 +209,7 @@ def render_actions(enabled: frozenset[str] | None) -> str:
 
 
 def make_orchestrator_node(
-    caller: Any, case_id: str, decision_model: type, max_turns: int,
-    config_dir: Path | None = None, *,
+    caller: Any, case_id: str, decision_model: type, max_turns: int, *,
     enabled: frozenset[str] | None = None,
     resolve: Callable[[str, str], str | None] | None = None,
     question_overlap: float = QUESTION_OVERLAP,
@@ -227,7 +221,7 @@ def make_orchestrator_node(
     node can recognise a second order for a delivered record without ever being
     able to render its contents.
     """
-    template = _prompt("orchestrator.md", config_dir)
+    template = _prompt("orchestrator.md")
     actions = render_actions(enabled)
 
     async def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
@@ -349,7 +343,7 @@ def make_orchestrator_node(
     return budget_guarded(orchestrator, channel="panel_events")
 
 
-def make_finalize_node(caller: Any, case_id: str, config_dir: Path | None = None) -> Callable:
+def make_finalize_node(caller: Any, case_id: str) -> Callable:
     """Build the node that commits to a final answer.
 
     Under a budget breach this must not call a model — the budget is precisely
@@ -358,7 +352,7 @@ def make_finalize_node(caller: Any, case_id: str, config_dir: Path | None = None
     result is an abstention, which the runner records as outcome `error` rather
     than a clinical judgement (D-028).
     """
-    template = _prompt("finalize.md", config_dir)
+    template = _prompt("finalize.md")
 
     async def finalize(state: dict[str, Any]) -> dict[str, Any]:
         turn = int(state.get("turn", 0))
@@ -426,30 +420,8 @@ def make_finalize_node(caller: Any, case_id: str, config_dir: Path | None = None
     return budget_guarded(finalize, channel="encounter_log", skip_if_exhausted=False)
 
 
-def advisory(node: Callable, *, keys: tuple[str, ...]) -> Callable:
-    """Let an advisory node fail without taking the case with it.
-
-    `budget_guarded` covers budget breaches; this covers the other way a model
-    call ends badly. An opinion that cannot be produced is simply absent — but
-    an unhandled `StructuredOutputFailed` propagates out of `graph.ainvoke`, the
-    runner records `crash`, and the case leaves the accuracy denominator. That
-    asymmetry is itself a defect: the same failure in the orchestrator becomes a
-    scored forced finalize, so the panel would lose cases the single doctor keeps.
-    """
-
-    @functools.wraps(node)
-    async def wrapper(state: dict[str, Any]) -> dict[str, Any]:
-        try:
-            return await node(state)
-        except StructuredOutputFailed as exc:
-            return {**{k: None for k in keys}, "parse_failures": exc.attempts}
-
-    return wrapper
-
-
 def make_challenger_node(
     caller: Any, case_id: str, *, channel: str, when: str = "scheduled",
-    config_dir: Path | None = None,
 ) -> Callable:
     """Build the challenger — advisory only (D-025).
 
@@ -464,7 +436,7 @@ def make_challenger_node(
     `panel_events`; `challenger_final` runs in the parent and writes
     `encounter_log` directly.
     """
-    template = _prompt("challenger.md", config_dir)
+    template = _prompt("challenger.md")
 
     async def challenger(state: dict[str, Any]) -> dict[str, Any]:
         prompt = template.format(
@@ -485,13 +457,10 @@ def make_challenger_node(
                                  f"({_LIKELIHOOD[opinion.dangerous_alternative_likelihood]})")],
         }
 
-    return advisory(budget_guarded(challenger, channel=channel, on_content_failure=False),
-                    keys=("challenger_opinion",))
+    return budget_guarded(challenger, channel=channel, degrade_keys=("challenger_opinion",))
 
 
-def make_challenger_final_node(
-    caller: Any, case_id: str, config_dir: Path | None = None
-) -> Callable:
+def make_challenger_final_node(caller: Any, case_id: str) -> Callable:
     """The challenger placed before a voluntary finalize.
 
     Sets `challenged_this_finalize`, which `route_action` reads **before** this
@@ -499,7 +468,7 @@ def make_challenger_final_node(
     to exactly one without a counter to get wrong.
     """
     inner = make_challenger_node(caller, case_id, channel="encounter_log",
-                                 when="pre_finalize", config_dir=config_dir)
+                                 when="pre_finalize")
 
     async def challenger_final(state: dict[str, Any]) -> dict[str, Any]:
         update = await inner(state)
@@ -509,9 +478,7 @@ def make_challenger_final_node(
     return challenger_final
 
 
-def make_cost_steward_node(
-    caller: Any, case_id: str, costs: Any, config_dir: Path | None = None
-) -> Callable:
+def make_cost_steward_node(caller: Any, case_id: str, costs: Any) -> Callable:
     """Build the cost-steward — advisory only (D-025).
 
     It reasons from the proposed test name and the price table, and has no
@@ -519,7 +486,7 @@ def make_cost_steward_node(
     Its objection informs later decisions; the order it objects to still goes
     ahead, because D-025 gives it no veto.
     """
-    template = _prompt("cost_steward.md", config_dir)
+    template = _prompt("cost_steward.md")
 
     async def cost_steward(state: dict[str, Any]) -> dict[str, Any]:
         proposed = state.get("action_argument") or ""
@@ -540,6 +507,5 @@ def make_cost_steward_node(
                                 text=opinion.objection))
         return {"cost_objection": opinion, "panel_events": events}
 
-    return advisory(budget_guarded(cost_steward, channel="panel_events",
-                                   on_content_failure=False),
-                    keys=("cost_objection",))
+    return budget_guarded(cost_steward, channel="panel_events",
+                          degrade_keys=("cost_objection",))

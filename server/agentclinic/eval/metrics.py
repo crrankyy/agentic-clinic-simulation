@@ -9,8 +9,6 @@ than left to whatever the code happens to do:
 * **Coverage** excludes errors and crashes from *both* terms: they are harness
   properties, not clinical judgements, and counting them as "not covered" would
   blame the doctor for a rate limit.
-* The **paired bootstrap** is restricted to cases scored in *both* arms. A case
-  the panel abstained on and the single doctor answered is not a pair.
 * Panel-minus-single accuracy is only interpretable at matched coverage.
   Abstention-excluded accuracy rewards whichever arm abstains more, and the
   challenger's entire job is to raise doubt — so the panel is systematically the
@@ -20,7 +18,6 @@ than left to whatever the code happens to do:
 from __future__ import annotations
 
 import math
-import random
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
@@ -88,45 +85,6 @@ def wilson(successes: int, n: int, z: float = 1.959963985) -> Interval | None:
     centre = (p + z * z / (2 * n)) / denom
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
     return Interval(max(0.0, centre - half), min(1.0, centre + half))
-
-
-@dataclass(frozen=True)
-class PairedDifference:
-    n_pairs: int
-    difference: float | None
-    interval: Interval | None
-
-    def render(self) -> str:
-        if self.difference is None:
-            return f"{NA} (no case scored in both arms)"
-        ci = f" 95% CI {self.interval}" if self.interval else ""
-        return f"{self.difference:+.3f} over {self.n_pairs} paired cases{ci}"
-
-
-def paired_bootstrap(
-    arm_a: dict[str, bool], arm_b: dict[str, bool], *, resamples: int = 10_000, seed: int = 20260915
-) -> PairedDifference:
-    """Difference in accuracy over cases scored in **both** arms.
-
-    Seeded, so a report is reproducible; the interval is a percentile interval
-    over the paired differences.
-    """
-    shared = sorted(set(arm_a) & set(arm_b))
-    if not shared:
-        return PairedDifference(0, None, None)
-
-    diffs = [int(arm_a[c]) - int(arm_b[c]) for c in shared]
-    observed = sum(diffs) / len(diffs)
-
-    rng = random.Random(seed)
-    means = []
-    for _ in range(resamples):
-        sample = [diffs[rng.randrange(len(diffs))] for _ in diffs]
-        means.append(sum(sample) / len(sample))
-    means.sort()
-    lo = means[int(0.025 * resamples)]
-    hi = means[min(int(0.975 * resamples), resamples - 1)]
-    return PairedDifference(len(shared), observed, Interval(lo, hi))
 
 
 @dataclass(frozen=True)

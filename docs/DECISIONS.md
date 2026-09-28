@@ -1240,3 +1240,56 @@ Arising during implementation and from `docs/PHASE_3_REVIEW.md`.
   file paths, so both are validated — a run must be a direct child of `runs/`
   and a case must be a known case with a trace in that run. Before, a stored-run
   reveal answered for any served case under any directory name, `..` included.
+
+## D-064 — Remove what nothing uses (an over-engineering audit, applied)
+
+- **Date:** 2026-09-28
+- **Question:** The user ran a repo-wide over-engineering audit on `main` and
+  asked for all 25 findings to be applied.
+- **Decision:** cut code, config and dependencies that no caller uses, and
+  merge duplicated code. Behaviour is unchanged: the 10-case run re-judged from
+  its traces alone gives an identical report, and the viewer lists the same 17
+  runs with the same status, stop reason and model.
+  - **One graph builder.** `single_doctor.py` and `encounter.py` were the same
+    builder twice. `build_graph(..., panel=)` builds both, the single doctor's
+    `decide` subgraph reuses the panel's boundary schemas, and
+    `build_case_graph` wires one case for the CLI and the web app alike. The
+    no-op `brief` node and the never-passed `checkpointer` are gone.
+  - **Old-run readers removed** (amends D-050, D-063). Every run with a
+    transcript was backfilled once with the files current code writes
+    (`run.json` start time, `summary.json` for two failed web runs, `case_end`
+    for `000eec7f`), so the fallbacks that guessed a run's model, config, start
+    time, status or stop reason from traces, reports and run names were
+    deleted. So was `rebuild_results`' approximate path for runs recorded
+    before D-054, and the report's `n/a` / lower-bound handling for those runs:
+    every such run already has its `results.csv`. The ledger keeps the one-line
+    D-055 fallback (`unlisted` → not in case), which a replay test of 1491dcac
+    uses.
+  - **Phase 5 scaffolding removed.** `search_literature` was never enabled; its
+    node, action text, event kind and `evidence` role go, and come back with
+    the evidence agent.
+  - **Arm comparison removed from the report.** No caller passed `comparison`,
+    so the paired bootstrap ran only in tests. It returns with the first
+    panel-vs-single report.
+  - **Config has one source.** `models.yaml` names one `model` instead of eight
+    identical role entries (amends D-020's form, not its rule), and
+    `base_url`, `require_parameters` and `judge.sdk` — read by nothing, always
+    false, or only printed — are gone. `budgets.yaml` is read strictly into
+    `RetryPolicy`; the mirrored defaults and legacy keys went with it.
+  - **Dead code removed:** `LLMCaller.text()`, the `recorder`, `attempts` and
+    `transient_retries` parameters, `_looks_empty`, `Tracer.tool_call`,
+    `PreflightResult.as_dict`, `CaseStore.__len__`, the judge's unread token
+    counters, `MatchResult.candidates`, the `config_dir` parameter threaded
+    through fifteen functions, the CORS middleware for a dev server that does
+    not exist, and the engine's pass-through wrappers.
+  - **Duplicated code merged:** `apply_verdict` (three copies), `drive` (the
+    stream loop, two copies), `delivered_keys` now reads the ledger, `advisory()`
+    folded into `budget_guarded(degrade_keys=)`.
+  - **The served set is checked by a test**, not by re-splitting the dataset on
+    every request (amends D-053's mechanism).
+  - **Only the file the pipeline loads is downloaded** (amends D-002): the
+    107-case `agentclinic_medqa.jsonl` was fetched, hashed and never loaded.
+  - **Dependencies:** `respx` → `httpx.MockTransport`; `uvicorn[standard]` →
+    `uvicorn` (drops httptools, uvloop, watchfiles and python-dotenv).
+- **Kept on purpose:** the isolation machinery (views, subgraph schemas, the
+  wire whitelist, `STATE_SOURCES`), which the brief requires.

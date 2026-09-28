@@ -23,7 +23,6 @@ const PARTY = {
   answer:         { cls: 'patient',    who: 'Patient' },
   exam:           { cls: 'gatekeeper', who: 'Examination' },
   test:           { cls: 'gatekeeper', who: 'Test result' },
-  literature:     { cls: 'system',     who: 'Evidence' },
   hypothesis:     { cls: 'doctor',     who: 'Doctor',        tag: 'working differential' },
   challenge:      { cls: 'challenger', who: 'Challenger',    tag: 'argues against the leader' },
   cost_objection: { cls: 'steward',    who: 'Cost steward' },

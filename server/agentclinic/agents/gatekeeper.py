@@ -27,8 +27,7 @@ from __future__ import annotations
 
 import re
 
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Iterator, Literal
 
 import yaml
@@ -120,7 +119,6 @@ class MatchResult:
     tier: MatchTier
     key: str | None = None
     payload: Any = None
-    candidates: tuple[str, ...] = ()
     #: True when the request bundled several things ("MRI brain and spinal
     #: cord") and the matched key covers only part of it (M-27).
     partial: bool = False
@@ -145,9 +143,9 @@ class GatekeeperReply:
     ref_turn: int | None = None
 
 
-def load_synonyms(config_dir: Path | None = None) -> dict[str, dict[str, str]]:
+def load_synonyms() -> dict[str, dict[str, str]]:
     """Return `{domain: {normalised alias: normalised canonical}}`."""
-    raw = yaml.safe_load((config_dir or CONFIG_DIR).joinpath("test_synonyms.yaml").read_text())
+    raw = yaml.safe_load(CONFIG_DIR.joinpath("test_synonyms.yaml").read_text())
     table: dict[str, dict[str, str]] = {}
     for domain, entries in raw.items():
         mapping: dict[str, str] = {}
@@ -216,7 +214,6 @@ class Gatekeeper:
                                    len(tokens(contained[0])) > len(tokens(contained[1]))):
             key = top[contained[0]]
             return MatchResult(tier="contains", key=key, payload=tree[key],
-                               candidates=tuple(top[c] for c in contained),
                                partial=_partial(wanted, contained[0]))
 
         # Tier 2 — curated synonyms. An alias may be a fragment of the request
@@ -280,9 +277,8 @@ class Gatekeeper:
             # D-035: ambiguous analyte. Return exactly one parent, never all.
             chosen = await self._ask_llm(request, tuple(parents))
             if chosen in tree:
-                return MatchResult(tier="llm_disambiguated", key=chosen,
-                                   payload=tree[chosen], candidates=tuple(parents))
-            return MatchResult(tier="unmatched", candidates=tuple(parents))
+                return MatchResult(tier="llm_disambiguated", key=chosen, payload=tree[chosen])
+            return MatchResult(tier="unmatched")
 
         # Tier 3 — LLM over key names only. It never sees a value.
         chosen = await self._ask_llm(request, tuple(tree))
@@ -388,16 +384,15 @@ def _render(key: str | None, payload: Any, indent: int = 0) -> str:
     return f"{label} {payload}".strip() if label else f"{pad}{payload}"
 
 
-def make_llm_disambiguator(caller: Any, case_id: str, config_dir: Path | None = None) -> Any:
+def make_llm_disambiguator(caller: Any, case_id: str) -> Any:
     """Build the cascade's tier-3 / ambiguous-leaf resolver.
 
     It is shown **key names only** — never a value. That matters: the matcher
     would otherwise be reading results it may not be allowed to return, and the
     brief forbids revealing unordered results.
     """
-    template = (config_dir or CONFIG_DIR).joinpath(
-        "prompts", "gatekeeper_disambiguate.md"
-    ).read_text(encoding="utf-8")
+    template = CONFIG_DIR.joinpath("prompts", "gatekeeper_disambiguate.md").read_text(
+        encoding="utf-8")
 
     from typing import Literal as _Literal
 

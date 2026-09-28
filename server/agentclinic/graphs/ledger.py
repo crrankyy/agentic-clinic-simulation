@@ -93,21 +93,11 @@ def build_ledger(log: Iterable[Event]) -> list[LedgerEntry]:
         if e.actor != "doctor":
             continue
         if e.kind in ("test", "exam"):
-            meta = dict(e.meta or {})
-            # The gatekeeper's own reply is the fallback source of truth, so an
-            # event written before the outcome flag existed (any run before
-            # D-055) cannot turn a refusal into a "result received".
-            reply = next((g for g in events[i + 1:] if g.actor == "gatekeeper"
-                          and g.kind == e.kind and g.turn == e.turn), None)
-            reply_meta = (reply.meta or {}) if reply is not None else {}
-            outcome = meta.get("outcome")
-            if outcome is None:
-                if meta.get("unlisted") == "True" or reply_meta.get("tier") == "unmatched":
-                    outcome = "not_in_case"
-                else:
-                    outcome = "result"
-            key = meta.get("key") or reply_meta.get("key")
-            ref = meta.get("ref_turn")
+            meta = e.meta or {}
+            # D-055 events carry `unlisted` but not yet `outcome`.
+            outcome = meta.get("outcome") or (
+                "not_in_case" if meta.get("unlisted") == "True" else "result")
+            key, ref = meta.get("key"), meta.get("ref_turn")
             out.append(LedgerEntry(
                 turn=e.turn, kind=e.kind, request=e.text, outcome=outcome,  # type: ignore[arg-type]
                 key=key if key not in (None, "", "None") else None,

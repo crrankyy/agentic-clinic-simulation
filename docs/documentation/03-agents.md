@@ -165,15 +165,14 @@ silent.
 ### `orchestrator`
 
 Chooses exactly one action per turn from a `Literal` type **built per run** from
-the enabled action set. A static five-member literal would offer
-`search_literature` in configurations where the evidence agent does not exist —
-the model would be *correct* to emit it, the output would validate, and the
-router would have no edge. A routing failure reachable by the model behaving
-properly.
+the enabled action set. A static literal would offer an action in configurations
+that disabled it — the model would be *correct* to emit it, the output would
+validate, and the router would have no edge. A routing failure reachable by the
+model behaving properly.
 
 Sees the summary and differential, never the log. The action list in its
-prompt is rendered from the run's enabled set (it used to list the disabled
-`search_literature`).
+prompt is rendered from the run's enabled set (it used to list a disabled
+action).
 
 **The repeat guard (D-056).** Each decision is validated by a per-call subclass
 of the decision model. A test or exam that equals, or is a token-subset of, a
@@ -227,11 +226,12 @@ them into its prompt, which is why it appears as a writer in `STATE_SOURCES`.
 > green because they covered the half that worked. The defect was inherited from
 > the plan, which three adversarial review rounds read without catching.
 
-### `advisory()`
+### Advisory failure
 
-Wraps sub-role nodes so a `StructuredOutputFailed` becomes `None` plus a
-`parse_failures` increment rather than killing the case. An advisory node that
-cannot produce output degrades to "no opinion".
+The sub-role nodes wear `budget_guarded(..., degrade_keys=(...))`, so a
+`StructuredOutputFailed` becomes `None` plus a `parse_failures` increment rather
+than killing the case. An advisory node that cannot produce output degrades to
+"no opinion".
 
 ## Judge — `agents/judge.py`
 

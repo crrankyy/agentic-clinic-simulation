@@ -25,10 +25,12 @@ real cost.
 provider:
   pin: ["Together"]
   allow_fallbacks: false
-roles:            # one model for every role: no role/model confound
-  orchestrator: deepseek/deepseek-v4.1-flash
-  ...
+model: deepseek/deepseek-v4.1-flash   # one model for every role: no role/model confound
 ```
+
+One key rather than a per-role map (D-064): the one-model rule (D-020) cannot
+be broken by editing one line. Per-role `max_tokens` and reasoning effort live
+in `role_settings`; a role not listed there uses `default`.
 
 Without a pin, OpenRouter may route the same model to different providers
 between calls, with different tokenisers, latency and structured-output support.
@@ -155,8 +157,7 @@ model time per case and no provider failures.
 |---|---|
 | `llm_call` | node, tokens, cost, latency |
 | `event` | one transcript entry with its `seq` |
-| `node` | node transitions |
-| `tool_call` | gatekeeper matching, etc. |
+| `node` | node transitions, and the runner's `case_end` |
 | `error` | **type and message only — never a traceback** |
 
 Two rules are load-bearing rather than cosmetic:

@@ -10,7 +10,9 @@ imported from that project.**
 | File | Cases | Used for |
 |---|---|---|
 | `agentclinic_medqa_extended.jsonl` | 214 | Everything |
-| `agentclinic_medqa.jsonl` | 107 | Downloaded, not currently used |
+
+The 107-case `agentclinic_medqa.jsonl` was downloaded until D-064 and never
+loaded; the script now fetches only the file the pipeline reads.
 
 The `.jsonl` files are **not committed**. They are reproducible from the pinned
 SHA plus the SHA-256 in `dataset/MANIFEST.json`, which *is* committed.

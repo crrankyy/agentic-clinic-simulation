@@ -7,17 +7,14 @@ import pytest
 from agentclinic.config import load_budgets, load_models, load_test_costs
 
 
-def test_models_load_and_every_role_has_a_model():
+def test_models_load_with_one_model_for_every_role():
     cfg = load_models()
-    assert cfg.judge.sdk == "anthropic"          # D-021: explicit override of §0.2
-    assert cfg.judge.model == "claude-opus-5"
+    assert cfg.judge.model == "claude-opus-5"    # D-021: Anthropic SDK, not OpenRouter
     assert cfg.judge.max_calls_per_run == 200    # D-037
-    roles = ("patient", "gatekeeper", "hypothesis", "orchestrator", "finalize",
-             "challenger", "cost_steward", "evidence")
-    models = {cfg.for_role(role) for role in roles}
     # D-020's surviving half (D-061 superseded ":free" at the user's direction):
     # one model for every role, so no comparison is confounded by role/model.
-    assert len(models) == 1, f"every role must use the same model, got {models}"
+    # A single key makes that structural (D-064).
+    assert isinstance(cfg.model, str) and cfg.model
 
 
 def test_every_role_has_bounded_output():
@@ -48,11 +45,6 @@ def test_structured_output_method_is_declared():
     assert load_models().structured_output_method in {
         "function_calling", "json_mode", "json_schema"
     }
-
-
-def test_unknown_role_raises_rather_than_defaulting():
-    with pytest.raises(KeyError, match="no model configured"):
-        load_models().for_role("radiologist")
 
 
 def test_recursion_limit_is_derived_from_the_turn_cap():
@@ -91,5 +83,5 @@ def test_recursion_limit_follows_the_graph_shape():
 
 
 def test_an_unknown_graph_is_rejected_rather_than_defaulted():
-    with pytest.raises(KeyError, match="no recursion multiplier"):
+    with pytest.raises(KeyError):
         load_budgets(graph="not_a_graph")

@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from agentclinic.eval.metrics import (
-    calibration_bins,
-    paired_bootstrap,
-    summarise,
-    wilson,
-)
+from agentclinic.eval.metrics import calibration_bins, summarise, wilson
 
 
 def test_abstentions_and_errors_leave_the_denominator():
@@ -49,25 +44,6 @@ def test_wilson_is_defined_at_the_extremes():
 def test_wilson_narrows_as_n_grows():
     small, large = wilson(5, 10), wilson(50, 100)
     assert (large.high - large.low) < (small.high - small.low)
-
-
-def test_paired_bootstrap_uses_only_cases_scored_in_both_arms():
-    a = {"c1": True, "c2": True, "c3": True}
-    b = {"c1": False, "c2": True}            # c3 was not scored in arm b
-    result = paired_bootstrap(a, b, resamples=200)
-    assert result.n_pairs == 2
-    assert result.difference == 0.5
-
-
-def test_paired_bootstrap_with_no_overlap_reports_na():
-    r = paired_bootstrap({"c1": True}, {"c2": True}, resamples=50)
-    assert r.difference is None and "no case scored in both arms" in r.render()
-
-
-def test_paired_bootstrap_is_seeded_and_reproducible():
-    a, b = {"c1": True, "c2": False}, {"c1": False, "c2": False}
-    assert (paired_bootstrap(a, b, resamples=500).interval
-            == paired_bootstrap(a, b, resamples=500).interval)
 
 
 def test_calibration_returns_empty_bins_rather_than_hiding_them():

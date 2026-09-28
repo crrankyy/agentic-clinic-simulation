@@ -59,24 +59,14 @@ then died in report generation.
 Reconstructs per-case results from `finals.json` plus the traces, for when the
 encounters completed but `results.csv` was never written.
 
-Runs recorded since **D-054** carry their full transcript, so counters come back
-exact. For older runs the counters are derived from per-node LLM calls and are
-**strictly weaker**:
-
-- `patient_questions` is exact (`ask_patient` always calls the model)
-- `turns` and `tests_ordered` are **lower bounds** — the gatekeeper only calls
-  the model when its cheap tiers miss, so a cheaply-resolved test leaves no record
-- exams, unlisted requests, match tiers, red flags, simulated cost are **not
-  recoverable at all**
-
-Such rows carry `behaviour_recovered=False` and the report prints
-`n/a (not recorded)` — in the summary and, since M-47, in the per-case table.
-
-Each case now ends with a `case_end` trace record (stop reason, turns, test
-cost), so a rebuild is exact; for older runs the stop reason is inferred from
-the transcript. The `judge` command rebuilds a result from **every** field by
-its declared type — it used to copy a hand-kept list, and every field added
-later came back as its default.
+The trace carries the full transcript (D-054), and each finished case ends with
+a `case_end` record (stop reason, turns, test cost), so a rebuild is exact. A
+run recorded before events were persisted cannot be rebuilt and says so, rather
+than printing defaults as measured zeros; the approximate reconstruction that
+used to cover those runs was removed in D-064, because every such run on disk
+already has its `results.csv`. The `judge` command rebuilds a result from
+**every** field by its declared type — it used to copy a hand-kept list, and
+every field added later came back as its default.
 
 > That flag exists because the first version silently printed the dataclass
 > defaults: `exams: 0`, `unlisted requests: 0`, `match tiers: (none)` — for a run
@@ -107,7 +97,7 @@ Every edge case is live at n=3, which is why each is spelled out.
 | Coverage | scored / (scored + abstained) — **errors and crashes excluded from both terms** |
 | top-k | from the judge's own `entry_matches`, not string comparison |
 | Confidence interval | **Wilson score** |
-| Arm comparison | **paired bootstrap**, restricted to cases scored in *both* arms |
+| Arm comparison | not in the report yet. The paired bootstrap was removed in D-064 because no report called it; it comes back with the first panel-vs-single comparison. |
 
 Three rules that prevent the numbers lying:
 
@@ -115,11 +105,9 @@ Three rules that prevent the numbers lying:
   `n_scored == 0` prints `n/a` — never `0.000`.
 - **Coverage excludes errors from both terms.** Counting them as "not covered"
   blames the doctor for a rate limit.
-- **The paired bootstrap needs actual pairs.** A case the panel abstained on and
-  the single doctor answered is not one.
-- **Panel-minus-single accuracy is only interpretable at matched coverage** —
-  abstention-excluded accuracy rewards whichever arm abstains more, so the report
-  warns when coverages differ.
+- **When the arm comparison returns**, it must pair only cases scored in both
+  arms, and it is only interpretable at matched coverage — abstention-excluded
+  accuracy rewards whichever arm abstains more.
 
 ## Report — `eval/report.py`
 

@@ -86,6 +86,16 @@ def cost_due(state: PanelState) -> str:
     return "cost_steward" if state.get("action") == "order_test" else "done"
 
 
+def build_solo_decide(orchestrator: Callable) -> Any:
+    """The single doctor's deliberation: the orchestrator alone, behind the
+    same boundary schemas as the panel."""
+    sub = StateGraph(PanelState, input_schema=PanelInput, output_schema=PanelOutput)
+    sub.add_node("orchestrator", orchestrator)
+    sub.add_edge(START, "orchestrator")
+    sub.add_edge("orchestrator", END)
+    return sub.compile()
+
+
 def build_doctor_panel(
     *, orchestrator: Callable, challenger: Callable, cost_steward: Callable
 ) -> Any:

@@ -141,11 +141,13 @@ def test_an_unknown_config_is_refused(client):
     assert r.status_code == 400
 
 
-def test_the_served_set_is_verified_against_the_split_not_hardcoded():
-    """If the dev subset ever changes, the app must refuse rather than drift."""
-    from agentclinic.api.engine import served_case_ids
+def test_the_served_set_is_the_dev_subset(cases):
+    """If the dev subset ever changes, this fails rather than the app drifting."""
+    from agentclinic.data.splits import select_eval_subset
+    from agentclinic.paths import DATASET_DIR
 
-    assert served_case_ids() == SERVED_CASES
+    splits = json.loads((DATASET_DIR / "splits.json").read_text(encoding="utf-8"))
+    assert tuple(select_eval_subset(cases, splits["dev"], n=3)) == SERVED_CASES
 
 
 # --- replay ------------------------------------------------------------------
@@ -197,7 +199,7 @@ async def test_a_live_run_streams_its_transcript_without_ground_truth(cases, tmp
               HYP, decide("finalize"), FINAL]
     model = FakeChatModel(script)
 
-    def fake_caller(tracer, timeout):
+    def fake_caller(tracer):
         return LLMCaller(model, tracer=tracer), None
     monkeypatch.setattr(e, "_caller", fake_caller)
 
@@ -209,8 +211,7 @@ async def test_a_live_run_streams_its_transcript_without_ground_truth(cases, tmp
     assert status and status[-1]["status"] == "finished", status
     assert len(events) >= 3, events
     assert [e_["seq"] for e_ in events] == list(range(len(events))), "seq must be dense"
-    assert {e_["actor"] for e_ in events} <= {"doctor", "patient", "gatekeeper",
-                                              "evidence", "system"}
+    assert {e_["actor"] for e_ in events} <= {"doctor", "patient", "gatekeeper", "system"}
 
     blob = json.dumps(events, ensure_ascii=False).lower()
     assert dx.lower() not in blob, "ground truth reached the live stream"
@@ -227,7 +228,7 @@ async def test_a_failed_run_reports_a_type_not_a_traceback(cases, tmp_path, monk
     e = Engine()
     monkeypatch.setattr("agentclinic.api.engine.RUNS_DIR", tmp_path)
 
-    def boom(tracer, timeout):
+    def boom(tracer):
         raise RuntimeError("prompt was: <ground truth here>")
     monkeypatch.setattr(e, "_caller", boom)
 
@@ -321,9 +322,9 @@ async def test_each_web_run_gets_its_own_spend_tracker(cases, tmp_path, monkeypa
     monkeypatch.setattr("agentclinic.api.engine.RUNS_DIR", tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-not-real")
     e = Engine()
-    _, g1 = e._caller(tracer=None, timeout=10)
+    _, g1 = e._caller(tracer=None)
     g1.spend.add(SERVED_CASES[0], 0.49)
-    _, g2 = e._caller(tracer=None, timeout=10)
+    _, g2 = e._caller(tracer=None)
     assert g2.spend.case_total(SERVED_CASES[0]) == 0.0
     assert g1.bucket is g2.bucket, "the rate bucket is per account and must be shared"
 
@@ -338,16 +339,18 @@ def test_every_replayable_run_says_which_model_produced_it(client, tmp_path, mon
         lines = [{"kind": "event", "seq": 0, "turn": 0, "event_kind": "objective",
                   "actor": "system", "text": "referral", "meta": {}},
                  {"kind": "event", "seq": 1, "turn": 1, "event_kind": "stop",
-                  "actor": "doctor", "text": "final: X", "meta": {}}]
-        if model:
-            lines.append({"kind": "llm_call", "node": "hypothesis", "model": model})
+                  "actor": "doctor", "text": "final: X", "meta": {}},
+                 {"kind": "node", "node": "runner", "event": "case_end",
+                  "stop_reason": "finalize"}]
         (d / "traces" / f"{SERVED_CASES[0]}.jsonl").write_text(
             "\n".join(json.dumps(x) for x in lines), encoding="utf-8")
         (d / "finals.json").write_text(json.dumps({SERVED_CASES[0]: {"diagnosis": "X"}}))
+        if model:
+            (d / "run.json").write_text(json.dumps({"model": model}))
     rows = {r["run_id"]: r for r in client.get("/api/runs").json()}
     assert rows["dev-single_doctor-aaaa"]["model"] == "deepseek/deepseek-v4.1-flash"
     assert rows["web-single_doctor-bbbb"]["model"] is None, "never guessed"
-    # A CLI run has no summary.json; its stop reason comes from the transcript.
+    # A CLI run has no summary.json; its stop reason is the runner's case_end.
     assert rows["dev-single_doctor-aaaa"]["stop_reason"] == "finalize"
 
 

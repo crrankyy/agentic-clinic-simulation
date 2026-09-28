@@ -85,8 +85,8 @@ def route_action(state: EncounterState, *, enabled: frozenset[str], has_challeng
     4. a named, enabled action goes to its node;
     5. anything else raises.
 
-    A *valid but disabled* action (e.g. `search_literature` when the evidence
-    agent is off) is not routed at all — it is invalid output, and the
+    A *valid but disabled* action (e.g. `order_test` in a run that disabled
+    it) is not routed at all — it is invalid output, and the
     orchestrator repairs it internally, where the attempt counter is a local
     variable and no cycle exists.
     """
