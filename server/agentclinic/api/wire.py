@@ -26,8 +26,9 @@ _EVENT_FIELDS = ("turn", "kind", "actor", "text")
 
 #: `meta` keys the UI renders. `Event.meta` is a free-form dict written by
 #: several nodes, so it is filtered rather than passed through: an unrecognised
-#: key is dropped, not forwarded.
-_META_KEYS = ("tier", "key", "unknown", "when", "cost_usd", "request")
+#: key is dropped, not forwarded. `action` is the action a repeat-guard event
+#: blocked (D-056); the guard's `reason` stays server-side.
+_META_KEYS = ("tier", "key", "unknown", "when", "cost_usd", "request", "action")
 
 
 def to_wire(event: Any, *, seq: int) -> dict[str, Any]:

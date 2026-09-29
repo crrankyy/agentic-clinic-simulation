@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Idle, Start refused on free tier</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+body{margin:0;background:#F4F2EC;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1E1D1A}
+a{color:#23508F}a:hover{color:#163A6B}
+button,select,input{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1024px; display: flex; flex-direction: column; background: #F4F2EC; overflow: hidden">
+
+<header style="height: 56px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: #FBFAF7; border-bottom: 1px solid #DDD9CF">
+<div style="display: flex; align-items: center; gap: 14px">
+<span aria-hidden="true" style="display: flex; align-items: center; gap: 4px"><span style="display: block; width: 9px; height: 9px; border-radius: 50%; background: #23508F"></span><span style="display: block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #8A4F0E; box-sizing: border-box"></span><span style="display: block; width: 9px; height: 9px; background: #3D4756"></span></span>
+<span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 21px; font-weight: 600; letter-spacing: -0.01em">AgentClinic</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5E5A52; padding-left: 14px; border-left: 1px solid #DDD9CF">encounter viewer</span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #3A3832">
+<span style="padding: 2px 7px; border: 1px solid #CFC9BB; border-radius: 4px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #5E5A52">free</span>
+<span>ling-3.0-flash-vl:free · 96/1000 requests left today</span>
+</div>
+</header>
+
+<div role="note" style="flex-shrink: 0; display: flex; gap: 12px; align-items: flex-start; padding: 10px 24px; background: #E9E5DA; border-bottom: 1px solid #D6D1C4; font-size: 13px; line-height: 1.5; color: #3A3832">
+<span aria-hidden="true" style="flex-shrink: 0; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; border: 1.5px solid #3A3832; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-family: 'Source Serif 4', Georgia, serif; font-size: 11px; font-weight: 600">i</span>
+<p style="margin: 0; max-width: 1240px"><strong style="font-weight: 600; color: #1E1D1A">Educational simulation only.</strong> Not medical advice. This is a simulation over public benchmark data and says nothing about clinical performance. It must never be presented or used as medical advice, and must never process real patient data.</p>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: flex">
+
+<aside style="width: 368px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; background: #FBFAF7; border-right: 1px solid #DDD9CF">
+<section style="padding: 18px 24px 20px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid #DDD9CF">
+<h2 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">New encounter</h2>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="case" style="font-size: 13px; font-weight: 500">Case</label>
+<div style="position: relative">
+<select id="case" style="appearance: none; -webkit-appearance: none; width: 100%; height: 44px; padding: 0 36px 0 12px; border: 1px solid #CFC9BB; border-radius: 6px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #1E1D1A"><option>medqa-0002</option><option>medqa-0009</option><option>medqa-0012</option></select>
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#5E5A52" stroke-width="1.5" style="position: absolute; right: 14px; top: 16px; pointer-events: none"><path d="M3 4.5l3 3 3-3"></path></svg>
+</div>
+<p style="margin: 2px 0 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 14px; line-height: 1.45; color: #3A3832">Evaluate and diagnose the patient presenting with a breast mass.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span id="cfg-label" style="font-size: 13px; font-weight: 500">Doctor configuration</span>
+<div role="group" aria-labelledby="cfg-label" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #CFC9BB; border-radius: 6px; overflow: hidden; background: #FFFFFF">
+<button type="button" aria-pressed="true" style="min-height: 52px; padding: 8px 12px; border: 0; background: #1E1D1A; color: #FBFAF7; text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 2px; cursor: pointer"><span style="font-size: 13px; font-weight: 600">Panel</span><span style="font-size: 11px; color: #D8D3C7">doctor, challenger, cost steward</span></button>
+<button type="button" aria-pressed="false" style="min-height: 52px; padding: 8px 12px; border: 0; border-left: 1px solid #CFC9BB; background: #FFFFFF; color: #1E1D1A; text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 2px; cursor: pointer"><span style="font-size: 13px; font-weight: 600">Single doctor</span></button>
+</div>
+</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+<label for="turns" style="font-size: 13px; font-weight: 500">Max turns <span style="font-weight: 400; color: #5E5A52">1–20</span></label>
+<input id="turns" type="number" min="1" max="20" value="20" style="width: 88px; height: 44px; box-sizing: border-box; padding: 0 10px; border: 1px solid #CFC9BB; border-radius: 6px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 14px; text-align: right">
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<button type="button" disabled="{{yes}}" aria-describedby="start-reason" style="height: 44px; align-self: flex-start; padding: 0 18px; border: 0; border-radius: 6px; background: #DDD9CF; color: #6F6A5E; font-size: 14px; font-weight: 600; cursor: not-allowed">Start encounter</button>
+<div id="start-reason" role="status" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1.5px solid #9A6A00; border-radius: 6px; background: #FBF1DE">
+<span aria-hidden="true" style="display: block; flex-shrink: 0; width: 13px; height: 12px; margin-top: 3px; background: #7A4F00; clip-path: polygon(50% 0, 100% 100%, 0 100%)"></span>
+<span style="display: flex; flex-direction: column; gap: 3px">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.45; color: #3D2A00">worst case ~143 requests, over today's allowance</span>
+<span style="font-size: 12px; line-height: 1.4; color: #5C4200">Fewer max turns or a single doctor lowers the worst case.</span>
+</span>
+</div>
+</div>
+</section>
+
+<section style="flex-grow: 1; min-height: 0; padding: 16px 24px 18px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">Replay a past run</h2>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="model" style="font-size: 13px; font-weight: 500">Model</label>
+<div style="position: relative">
+<select id="model" style="appearance: none; -webkit-appearance: none; width: 100%; height: 44px; padding: 0 36px 0 12px; border: 1px solid #CFC9BB; border-radius: 6px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #1E1D1A"><option>ling-3.0-flash-vl:free</option></select>
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#5E5A52" stroke-width="1.5" style="position: absolute; right: 14px; top: 16px; pointer-events: none"><path d="M3 4.5l3 3 3-3"></path></svg>
+</div>
+</div>
+<div style="flex-grow: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed #CFC9BB; border-radius: 6px; background: #FFFFFF">
+<span aria-hidden="true" style="display: block; width: 14px; height: 14px; border: 1.5px dashed #8C8678; border-radius: 50%; box-sizing: border-box"></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: #5E5A52">no runs for this model</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<button type="button" disabled="{{yes}}" style="height: 44px; padding: 0 18px; border: 1px solid #CFC9BB; border-radius: 6px; background: #EFECE4; color: #6F6A5E; font-size: 14px; font-weight: 600; cursor: not-allowed">Replay</button>
+<p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: #5E5A52">Replays stream through the same channel as a live run, and cost nothing.</p>
+</div>
+</section>
+</aside>
+
+<main style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+<div role="status" style="height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 28px; background: #FBFAF7; border-bottom: 1px solid #DDD9CF">
+<span style="display: flex; align-items: center; gap: 9px">
+<span style="display: block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #6F6A5E; box-sizing: border-box"></span>
+<span style="font-size: 14px; font-weight: 600">Idle</span>
+</span>
+<span style="font-size: 13px; color: #5E5A52">nothing loaded</span>
+<span style="margin-left: auto; display: flex; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #6F6A5E">
+<span style="padding: 4px 9px; border: 1px solid #DDD9CF; border-radius: 4px">turn –</span>
+<span style="padding: 4px 9px; border: 1px solid #DDD9CF; border-radius: 4px">0 events</span>
+</span>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: flex">
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 64px 80px">
+<div style="max-width: 520px; display: flex; flex-direction: column; align-items: center; gap: 22px; text-align: center">
+<span aria-hidden="true" style="display: flex; align-items: center; gap: 12px">
+<sc-for list="{{key}}" as="k" hint-placeholder-count="8"><span style="display: block; flex-shrink: 0; {{k.gs}}"></span></sc-for>
+</span>
+<p style="margin: 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 24px; line-height: 1.35; font-weight: 600; color: #1E1D1A">Pick a case and start an encounter, or replay a past run.</p>
+<p style="margin: 0; font-size: 15px; line-height: 1.55; color: #3A3832">The doctor cannot see the diagnosis. Neither can this page, until the encounter is over.</p>
+</div>
+</div>
+
+<aside aria-label="Key" style="width: 232px; flex-shrink: 0; border-left: 1px solid #DDD9CF; background: #FBFAF7; padding: 18px 26px; display: flex; flex-direction: column; gap: 9px; box-sizing: border-box">
+<h2 style="margin: 0 0 3px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">Key</h2>
+<sc-for list="{{key}}" as="k" hint-placeholder-count="8">
+<div style="display: flex; gap: 10px; align-items: flex-start">
+<span style="display: flex; width: 14px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center"><span style="display: block; {{k.gs}}"></span></span>
+<span style="display: flex; flex-direction: column; gap: 1px"><span style="font-size: 12.5px; font-weight: 600; color: {{k.lc}}">{{k.lab}}</span><span style="font-size: 11.5px; line-height: 1.35; color: #5E5A52">{{k.text}}</span></span>
+</div>
+</sc-for>
+</aside>
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1024}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const OCT = 'clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)';
+    const key = [
+      ['#23508F', 'width:11px;height:11px;border-radius:50%;background:#23508F', 'Doctor', 'asks, examines, orders tests'],
+      ['#8A4F0E', 'width:11px;height:11px;border-radius:50%;border:2px solid #8A4F0E;box-sizing:border-box', 'Patient', 'answers questions'],
+      ['#3D4756', 'width:11px;height:11px;background:#3D4756', 'Gatekeeper', 'returns results from the case record'],
+      ['#6E3591', 'width:9px;height:9px;margin:0 1px;background:#6E3591;transform:rotate(45deg)', 'Challenger', 'advisor · argues against the leader'],
+      ['#1F6B5D', 'width:12px;height:11px;background:#1F6B5D;clip-path:polygon(50% 0,100% 100%,0 100%)', 'Cost steward', 'advisor · objects to wasteful tests'],
+      ['#5E5A52', 'width:12px;height:3px;background:#5E5A52', 'System', 'referral, end of encounter, budget'],
+      ['#A3221B', 'width:12px;height:12px;background:#A3221B;' + OCT, 'Alert', 'provider and parse failures'],
+      ['#6F6A5E', 'width:11px;height:11px;border:1.5px dashed #6F6A5E;box-sizing:border-box', 'Repeat guard', 'blocked repeat, no turn used']
+    ].map((r) => ({ lc: r[0], gs: r[1], lab: r[2], text: r[3] }));
+    return { yes: true, key: key };
+  }
+}
+</script>
+</body>
+</html>

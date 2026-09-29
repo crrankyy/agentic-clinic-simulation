@@ -154,6 +154,7 @@ def runs() -> list[dict[str, Any]]:
                 out.append({"run_id": d.name, "case_id": case_id,
                             "config": meta.get("config"), "model": meta.get("model"),
                             "provider_pin": meta.get("provider_pin"),
+                            "max_turns": meta.get("max_turns"),
                             "status": _status(summary, finals, case_id),
                             "stop_reason": _case_stop(d, case_id, summary),
                             "started": meta.get("started_utc", ""),

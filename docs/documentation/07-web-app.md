@@ -31,7 +31,7 @@ Three options were considered:
 
 ```python
 _EVENT_FIELDS = ("turn", "kind", "actor", "text")
-_META_KEYS = ("tier", "key", "unknown", "when", "cost_usd", "request")
+_META_KEYS = ("tier", "key", "unknown", "when", "cost_usd", "request", "action")
 
 def to_wire(event, *, seq):
     meta = dict(getattr(event, "meta", {}) or {})
@@ -124,7 +124,7 @@ no API allowance. This is the mode to use while working on the UI.
 
 **Choose a model, then a run** (D-063). The model selector defaults to the model
 you ran most recently; beneath it, that model's runs are listed newest first,
-each run grouped with its cases and their outcome. Any case with a recorded
+each run grouped with its cases and their outcome, as a list of buttons (D-065). Any case with a recorded
 transcript replays — a 10-case run shows all ten — while starting a *live*
 encounter stays limited to the three served cases. Each run's model, config and start
 time come from `run.json`, written when the run starts; a run without one says
@@ -146,37 +146,44 @@ key"), where it used to show "did not validate".
 
 ## The client — `client/`
 
-Three files, no build step, no dependencies. `index.html`, `styles.css`,
-`app.js`, served as static files by the same FastAPI app.
+Three files, no build step, no dependencies beyond Google Fonts: `index.html`,
+`styles.css`, `app.js`, served as static files by the same FastAPI app. The
+design is the handoff in `docs/design/encounter-viewer/` (D-065): `SPEC.md` is
+the source of truth, and the boards and PNGs are its reference. Light theme and
+desktop only for now.
 
-### Party mapping keys off `kind`, not `actor`
+### Identity keys off `kind`, not `actor`
 
-```javascript
-const PARTY = {
-  question:       { cls: 'doctor',     who: 'Doctor',      tag: 'asks the patient' },
-  answer:         { cls: 'patient',    who: 'Patient' },
-  test:           { cls: 'gatekeeper', who: 'Test result' },
-  challenge:      { cls: 'challenger', who: 'Challenger' },
-  cost_objection: { cls: 'steward',    who: 'Cost steward' },
-  ...
-};
-```
-
-**The challenger and cost steward emit with `actor="doctor"`**, because they are
-sub-roles of the doctor side. Styling by actor alone renders them as the doctor
-talking to itself. A `test` event additionally splits on actor: from the doctor
-it is an order, from the gatekeeper it is the result.
+`identify(ev)` maps each event to one of eight identities (Doctor, Patient,
+Gatekeeper, Challenger, Cost steward, System, Alert, Repeat guard), a label, a
+tag line and a template (row, record, compact line, advisor box, system rule,
+alert band, guard band). **The challenger and cost steward emit with
+`actor="doctor"`**, because they are sub-roles of the doctor side; styling by
+actor alone would render them as the doctor talking to itself. `exam` and
+`test` are the only kinds that also split on actor: from the doctor they are
+an order, from the gatekeeper a result. Every identity pairs its colour with a
+label and a glyph shape, so none depends on colour alone.
 
 ### What the UI shows
 
-- Case selector with the objective — the doctor's own referral line
-- Configuration selector, with a **live worst-case request projection** that
-  disables Start if the run would not fit in today's allowance
-- Turn separators, gatekeeper match tier inline, "doesn't know" on patient replies
-- **Repeat blocked** entries for proposals the guard rejected, with the action and "no turn used"
-- The final answer and ranked differential
-- A **Ground truth** panel that appears only once the encounter ends, with the
-  answer fetched on click
+- A case selector with its referral objective, a Panel / Single doctor
+  segmented control, max turns, and Start. When Start is blocked or refused,
+  the reason sits in a box under the button: a rejected key (red), the free
+  tier's allowance (amber), or the note that a run is streaming.
+- The replay list, grouped by run, newest first.
+- A status bar for every state: idle, running, replaying, finished, ended by a
+  cap, failed with a plain-language reason, incomplete, connection lost,
+  refused.
+- The transcript, bottom-anchored and following the newest message. Scrolling
+  up more than about 80px stops following and shows "Turn N of M" and a
+  "Jump to latest" pill. Gatekeeper results show the matched record and its
+  simulated test cost.
+- A right column: a turn index with one glyph per event and the identity key;
+  once the run ends, a compact index, a link to the final answer, and the
+  **Ground truth** panel. That panel is not in the DOM until the stream's
+  status event arrives, and the answer is fetched only on click.
+- The final answer: diagnosis, confidence, rationale, red flags, and the ranked
+  differential with a probability bar and a rationale per entry.
 
 ## Bugs this surfaced
 

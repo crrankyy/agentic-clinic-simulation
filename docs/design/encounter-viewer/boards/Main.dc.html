@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Live panel run</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+body{margin:0;background:#F4F2EC;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1E1D1A}
+a{color:#23508F}a:hover{color:#163A6B}
+button,select,input{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1024px; display: flex; flex-direction: column; background: #F4F2EC; overflow: hidden">
+
+<header style="height: 56px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: #FBFAF7; border-bottom: 1px solid #DDD9CF">
+<div style="display: flex; align-items: center; gap: 14px">
+<span aria-hidden="true" style="display: flex; align-items: center; gap: 4px"><span style="display: block; width: 9px; height: 9px; border-radius: 50%; background: #23508F"></span><span style="display: block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #8A4F0E; box-sizing: border-box"></span><span style="display: block; width: 9px; height: 9px; background: #3D4756"></span></span>
+<span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 21px; font-weight: 600; letter-spacing: -0.01em">AgentClinic</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5E5A52; padding-left: 14px; border-left: 1px solid #DDD9CF">encounter viewer</span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #3A3832">
+<span style="padding: 2px 7px; border: 1px solid #CFC9BB; border-radius: 4px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #5E5A52">key</span>
+<span>deepseek-v4.1-flash · paid · cap $0.5/case · $1.10 left on key</span>
+</div>
+</header>
+
+<div role="note" style="flex-shrink: 0; display: flex; gap: 12px; align-items: flex-start; padding: 10px 24px; background: #E9E5DA; border-bottom: 1px solid #D6D1C4; font-size: 13px; line-height: 1.5; color: #3A3832">
+<span aria-hidden="true" style="flex-shrink: 0; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; border: 1.5px solid #3A3832; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-family: 'Source Serif 4', Georgia, serif; font-size: 11px; font-weight: 600">i</span>
+<p style="margin: 0; max-width: 1240px"><strong style="font-weight: 600; color: #1E1D1A">Educational simulation only.</strong> Not medical advice. This is a simulation over public benchmark data and says nothing about clinical performance. It must never be presented or used as medical advice, and must never process real patient data.</p>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: flex">
+
+<aside style="width: 368px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; background: #FBFAF7; border-right: 1px solid #DDD9CF">
+<section style="padding: 18px 24px 20px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid #DDD9CF">
+<h2 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">New encounter</h2>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="case" style="font-size: 13px; font-weight: 500">Case</label>
+<div style="position: relative">
+<select id="case" style="appearance: none; -webkit-appearance: none; width: 100%; height: 44px; padding: 0 36px 0 12px; border: 1px solid #CFC9BB; border-radius: 6px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #1E1D1A"><option>medqa-0002</option><option>medqa-0009</option><option>medqa-0012</option></select>
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#5E5A52" stroke-width="1.5" style="position: absolute; right: 14px; top: 16px; pointer-events: none"><path d="M3 4.5l3 3 3-3"></path></svg>
+</div>
+<p style="margin: 2px 0 0; font-family: 'Source Serif 4', Georgia, serif; font-size: 14px; line-height: 1.45; color: #3A3832">Evaluate and diagnose the patient presenting with a breast mass.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span id="cfg-label" style="font-size: 13px; font-weight: 500">Doctor configuration</span>
+<div role="group" aria-labelledby="cfg-label" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #CFC9BB; border-radius: 6px; overflow: hidden; background: #FFFFFF">
+<button type="button" aria-pressed="true" style="min-height: 52px; padding: 8px 12px; border: 0; background: #1E1D1A; color: #FBFAF7; text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 2px; cursor: pointer"><span style="font-size: 13px; font-weight: 600">Panel</span><span style="font-size: 11px; color: #D8D3C7">doctor, challenger, cost steward</span></button>
+<button type="button" aria-pressed="false" style="min-height: 52px; padding: 8px 12px; border: 0; border-left: 1px solid #CFC9BB; background: #FFFFFF; color: #1E1D1A; text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 2px; cursor: pointer"><span style="font-size: 13px; font-weight: 600">Single doctor</span></button>
+</div>
+</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+<label for="turns" style="font-size: 13px; font-weight: 500">Max turns <span style="font-weight: 400; color: #5E5A52">1–20</span></label>
+<input id="turns" type="number" min="1" max="20" value="20" style="width: 88px; height: 44px; box-sizing: border-box; padding: 0 10px; border: 1px solid #CFC9BB; border-radius: 6px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 14px; text-align: right">
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" disabled="{{yes}}" style="height: 44px; flex-shrink: 0; padding: 0 18px; border: 0; border-radius: 6px; background: #DDD9CF; color: #6F6A5E; font-size: 14px; font-weight: 600; cursor: not-allowed">Start encounter</button>
+<span style="font-size: 12.5px; line-height: 1.4; color: #3A3832">A run is streaming. Start and Replay open again when it ends.</span>
+</div>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5E5A52">worst case ~143 requests</span>
+</div>
+</section>
+
+<section style="flex-grow: 1; min-height: 0; padding: 16px 24px 18px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">Replay a past run</h2>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="model" style="font-size: 13px; font-weight: 500">Model</label>
+<div style="position: relative">
+<select id="model" style="appearance: none; -webkit-appearance: none; width: 100%; height: 44px; padding: 0 36px 0 12px; border: 1px solid #CFC9BB; border-radius: 6px; background: #FFFFFF; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #1E1D1A"><option>deepseek-v4.1-flash, 2 runs</option><option>ling-3.0-flash-vl:free, 4 runs</option></select>
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#5E5A52" stroke-width="1.5" style="position: absolute; right: 14px; top: 16px; pointer-events: none"><path d="M3 4.5l3 3 3-3"></path></svg>
+</div>
+</div>
+<div role="list" aria-label="Runs and cases, newest first" style="flex-grow: 1; min-height: 0; overflow: auto; border: 1px solid #DDD9CF; border-radius: 6px; background: #FFFFFF">
+<sc-for list="{{runs}}" as="r" hint-placeholder-count="2">
+<div role="listitem">
+<div style="padding: 9px 12px 8px; background: #F4F2EC; border-bottom: 1px solid #E6E2D8; display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 12.5px; font-weight: 600">{{r.head}}</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52">{{r.id}}</span>
+</div>
+<sc-for list="{{r.rows}}" as="c" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{c.sel}}" style="width: 100%; min-height: 40px; display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 0 12px; border: 0; border-bottom: 1px solid #EFECE4; background: {{c.bg}}; text-align: left; cursor: pointer; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #1E1D1A">
+<span style="font-weight: {{c.fw}}">{{c.id}}</span>
+<span style="display: flex; align-items: center; gap: 7px; color: {{c.sc}}"><span style="display: block; flex-shrink: 0; {{c.sg}}"></span><span>{{c.state}}</span></span>
+<span style="color: #5E5A52">{{c.ev}} events</span>
+</button>
+</sc-for>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<button type="button" disabled="{{yes}}" style="height: 44px; padding: 0 18px; border: 1px solid #CFC9BB; border-radius: 6px; background: #EFECE4; color: #6F6A5E; font-size: 14px; font-weight: 600; cursor: not-allowed">Replay</button>
+<p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: #5E5A52">Replays stream through the same channel as a live run, and cost nothing.</p>
+</div>
+</section>
+</aside>
+
+<main style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+<div role="status" style="height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 28px; background: #FBFAF7; border-bottom: 1px solid #DDD9CF">
+<span style="display: flex; align-items: center; gap: 9px">
+<span style="display: block; width: 10px; height: 10px; border-radius: 50%; background: #23508F; box-shadow: 0 0 0 4px #D5DFEE"></span>
+<span style="font-size: 14px; font-weight: 600">Running</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #3A3832">· deepseek-v4.1-flash</span>
+</span>
+<span style="font-size: 13px; color: #5E5A52">live panel encounter on medqa-0002 · via Together</span>
+<span style="margin-left: auto; display: flex; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+<span style="padding: 4px 9px; border: 1px solid #CFC9BB; border-radius: 4px; background: #FFFFFF">turn 4</span>
+<span style="padding: 4px 9px; border: 1px solid #CFC9BB; border-radius: 4px; background: #FFFFFF">15 events</span>
+</span>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: flex">
+<div style="flex-grow: 1; min-width: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 44px 22px">
+<div style="width: 100%; max-width: 800px; display: flex; flex-direction: column">
+<sc-for list="{{msgs}}" as="m" hint-placeholder-count="6">
+<sc-if value="{{m.isTurn}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 12px; padding: 22px 0 8px">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #3A3832">{{m.text}}</span>
+<span style="display: block; flex-grow: 1; height: 1px; background: #D6D1C4"></span>
+</div>
+</sc-if>
+<sc-if value="{{m.isRow}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; gap: 20px; padding: 9px 0; align-items: flex-start">
+<div style="width: 156px; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; padding-top: 5px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="display: block; flex-shrink: 0; {{m.gs}}"></span><span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span></span>
+<span style="padding-left: 20px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.35; color: #6B675E">{{m.tag}}</span>
+</div>
+<p style="margin: 0; flex-grow: 1; min-width: 0; {{m.ts}}">{{m.text}}</p>
+</div>
+</sc-if>
+<sc-if value="{{m.isRec}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; gap: 20px; padding: 9px 0; align-items: flex-start">
+<div style="width: 156px; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; padding-top: 5px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="display: block; flex-shrink: 0; {{m.gs}}"></span><span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span></span>
+<span style="padding-left: 20px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.35; color: #6B675E">{{m.tag}}</span>
+</div>
+<div style="flex-grow: 1; min-width: 0; background: #FFFFFF; border: 1px solid #D6D1C4">
+<sc-if value="{{m.hasRec}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; justify-content: space-between; gap: 12px; padding: 6px 14px; border-bottom: 1px solid #E6E2D8; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52"><span>record · {{m.rec}}</span><span>test cost {{m.cost}}</span></div>
+</sc-if>
+<p style="margin: 0; padding: 11px 14px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.65; white-space: pre-line; color: #1E1D1A">{{m.text}}</p>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{m.isDiff}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; gap: 20px; padding: 0 0 8px">
+<div style="width: 156px; flex-shrink: 0"></div>
+<p style="margin: 0; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 13px; color: #1E1D1A">
+<span style="display: block; width: 7px; height: 7px; border-radius: 50%; background: #23508F"></span>
+<span style="font-weight: 600; color: #23508F">Doctor</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6B675E">working differential</span>
+<span style="padding: 2px 9px; border: 1px solid #C9D3E3; border-radius: 999px; background: #FFFFFF">{{m.text}}</span>
+</p>
+</div>
+</sc-if>
+<sc-if value="{{m.isAdv}}" hint-placeholder-val="{{false}}">
+<div style="padding: 8px 0 10px 176px">
+<div style="border: 1.5px solid {{m.lc}}; border-radius: 14px; background: #FFFFFF; padding: 11px 16px 13px; display: flex; flex-direction: column; gap: 6px">
+<span style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<span style="display: block; flex-shrink: 0; {{m.gs}}"></span>
+<span style="font-size: 12.5px; font-weight: 600; color: {{m.lc}}">{{m.lab}}</span>
+<span style="padding: 1px 7px; border: 1px solid {{m.lc}}; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: {{m.lc}}">advisor</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6B675E">{{m.tag}}</span>
+</span>
+<p style="margin: 0; font-size: 14.5px; line-height: 1.55; color: #1E1D1A">{{m.text}}</p>
+</div>
+</div>
+</sc-if>
+</sc-for>
+<div style="display: flex; gap: 20px; padding: 14px 0 0">
+<div style="width: 156px; flex-shrink: 0"></div>
+<span style="display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: #5E5A52">
+<span aria-hidden="true" style="display: flex; gap: 4px"><span style="display: block; width: 6px; height: 6px; border-radius: 50%; background: #23508F"></span><span style="display: block; width: 6px; height: 6px; border-radius: 50%; background: #7F9BC4"></span><span style="display: block; width: 6px; height: 6px; border-radius: 50%; background: #C9D3E3"></span></span>
+<span>Streaming · the view follows the newest message</span>
+</span>
+</div>
+</div>
+</div>
+
+<aside aria-label="Turn index" style="width: 232px; flex-shrink: 0; border-left: 1px solid #DDD9CF; background: #FBFAF7; padding: 18px 16px; display: flex; flex-direction: column; gap: 22px; overflow: hidden; box-sizing: border-box">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h2 style="margin: 0 0 6px 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">Turns</h2>
+<sc-for list="{{turns}}" as="t" hint-placeholder-count="4">
+<a href="{{t.href}}" style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 6px; background: {{t.bg}}; text-decoration: none; color: #1E1D1A">
+<span style="display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px"><span style="font-weight: 600">{{t.label}}</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5E5A52">{{t.ev}}</span></span>
+<span aria-hidden="true" style="display: flex; gap: 6px; align-items: center"><sc-for list="{{t.gl}}" as="g" hint-placeholder-count="3"><span style="display: block; flex-shrink: 0; {{g}}"></span></sc-for></span>
+</a>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 9px; padding: 0 10px">
+<h2 style="margin: 0 0 3px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #5E5A52">Key</h2>
+<sc-for list="{{key}}" as="k" hint-placeholder-count="8">
+<div style="display: flex; gap: 10px; align-items: flex-start">
+<span style="display: flex; width: 14px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center"><span style="display: block; {{k.gs}}"></span></span>
+<span style="display: flex; flex-direction: column; gap: 1px"><span style="font-size: 12.5px; font-weight: 600; color: {{k.lc}}">{{k.lab}}</span><span style="font-size: 11.5px; line-height: 1.35; color: #5E5A52">{{k.text}}</span></span>
+</div>
+</sc-for>
+</div>
+</aside>
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1024}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ID = {
+      doctor: { c: '#23508F', g: 'width:11px;height:11px;border-radius:50%;background:#23508F' },
+      patient: { c: '#8A4F0E', g: 'width:11px;height:11px;border-radius:50%;border:2px solid #8A4F0E;box-sizing:border-box' },
+      gate: { c: '#3D4756', g: 'width:11px;height:11px;background:#3D4756' },
+      chall: { c: '#6E3591', g: 'width:9px;height:9px;margin:0 1px;background:#6E3591;transform:rotate(45deg)' },
+      cost: { c: '#1F6B5D', g: 'width:12px;height:11px;background:#1F6B5D;clip-path:polygon(50% 0,100% 100%,0 100%)' },
+      system: { c: '#5E5A52', g: 'width:12px;height:3px;background:#5E5A52' },
+      alert: { c: '#A3221B', g: 'width:12px;height:12px;background:#A3221B;clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)' },
+      guard: { c: '#6F6A5E', g: 'width:11px;height:11px;border:1.5px dashed #6F6A5E;box-sizing:border-box' }
+    };
+    const SERIF = "font-family:'Source Serif 4',Georgia,serif;font-size:16.5px;line-height:1.55;color:#1E1D1A";
+    const TS = { doctor: SERIF, patient: SERIF + ';font-style:italic', system: 'font-size:14.5px;line-height:1.55;color:#3A3832' };
+    const m = (k, id, lab, tag, text, x) => Object.assign({
+      isTurn: k === 'turn', isRow: k === 'row', isRec: k === 'rec', isDiff: k === 'diff', isAdv: k === 'adv',
+      gs: ID[id].g, lc: ID[id].c, lab: lab, tag: tag, text: text, ts: TS[id] || TS.system, hasRec: false
+    }, x || {});
+    const turn = (n) => m('turn', 'system', '', '', 'Turn ' + n);
+    const diff = (t) => m('diff', 'doctor', 'Doctor', 'working differential', t);
+    const msgs = [
+      m('row', 'system', 'Referral', '', 'Evaluate and diagnose the patient presenting with a breast mass.'),
+      turn(1),
+      m('row', 'doctor', 'Doctor', 'asks the patient', 'How old are you, and are you still having periods?'),
+      m('row', 'patient', 'Patient', "doesn't know", "I'm 48. I haven't been told where I am with menopause, so I don't know."),
+      diff('leading: Fibroadenoma'),
+      turn(2),
+      m('row', 'doctor', 'Doctor', 'requests an exam', 'Breast examination (bilateral breasts and axillae)'),
+      m('rec', 'gate', 'Examination', 'matched: contains', 'Breast Examination:\nInspection: No skin changes, nipple retraction, or discharge.\nPalpation: A 6-cm, nontender, multinodular mass in the upper outer quadrant of the left breast.', { hasRec: true, rec: 'Breast_Examination', cost: '$180.00' }),
+      diff('leading: Fibroadenoma'),
+      turn(3),
+      m('row', 'doctor', 'Doctor', 'asks the patient', 'Has the lump changed in size since you first noticed it?'),
+      m('row', 'patient', 'Patient', '', 'It has grown quite quickly over the last few months.'),
+      diff('leading: Fibroadenoma'),
+      m('adv', 'chall', 'Challenger', 'argues against the leader · scheduled, every third turn', 'Rapid growth to 6 cm is not typical of a simple fibroadenoma. Most dangerous unexcluded: Breast carcinoma (LESS likely than your leader)'),
+      turn(4),
+      m('row', 'doctor', 'Doctor', 'orders a test', 'Serum CA 15-3 tumour marker'),
+      m('adv', 'cost', 'Cost steward', '', 'Unlikely to change management at this stage.'),
+      m('rec', 'gate', 'Test result', 'matched: unmatched', 'Not available for this patient. This investigation is not part of the case record at all, so rewording the request will not retrieve it.'),
+      diff('leading: Fibroadenoma')
+    ];
+    const g = (ids) => ids.map((i) => ID[i].g);
+    const turns = [
+      { label: 'Referral', ev: '1 event', gl: g(['system']), bg: 'transparent', href: '#referral' },
+      { label: 'Turn 1', ev: '3 events', gl: g(['doctor', 'patient', 'doctor']), bg: 'transparent', href: '#turn-1' },
+      { label: 'Turn 2', ev: '3 events', gl: g(['doctor', 'gate', 'doctor']), bg: 'transparent', href: '#turn-2' },
+      { label: 'Turn 3', ev: '4 events', gl: g(['doctor', 'patient', 'doctor', 'chall']), bg: 'transparent', href: '#turn-3' },
+      { label: 'Turn 4 · live', ev: '4 events', gl: g(['doctor', 'cost', 'gate', 'doctor']), bg: '#E9E5DA', href: '#turn-4' }
+    ];
+    const key = [
+      ['doctor', 'Doctor', 'asks, examines, orders tests'],
+      ['patient', 'Patient', 'answers questions'],
+      ['gate', 'Gatekeeper', 'returns results from the case record'],
+      ['chall', 'Challenger', 'advisor · argues against the leader'],
+      ['cost', 'Cost steward', 'advisor · objects to wasteful tests'],
+      ['system', 'System', 'referral, end of encounter, budget'],
+      ['alert', 'Alert', 'provider and parse failures'],
+      ['guard', 'Repeat guard', 'blocked repeat, no turn used']
+    ].map((r) => ({ gs: ID[r[0]].g, lc: ID[r[0]].c, lab: r[1], text: r[2] }));
+    const OCT = 'clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)';
+    const st = (s) => {
+      if (s === 'finalize') return { sg: 'width:9px;height:9px;border-radius:50%;background:#1E1D1A', sc: '#1E1D1A' };
+      if (s === 'running') return { sg: 'width:9px;height:9px;border-radius:50%;background:#23508F;box-shadow:0 0 0 3px #D5DFEE', sc: '#23508F' };
+      if (s === 'incomplete') return { sg: 'width:9px;height:9px;border-radius:50%;border:1.5px dashed #5E5A52;box-sizing:border-box', sc: '#5E5A52' };
+      if (['turn_cap', 'no_new_actions', 'budget_exhausted', 'request_cap'].indexOf(s) >= 0) return { sg: 'width:9px;height:9px;border-radius:50%;border:2px solid #7A4F00;box-sizing:border-box', sc: '#7A4F00' };
+      return { sg: 'width:10px;height:10px;background:#A3221B;' + OCT, sc: '#A3221B' };
+    };
+    const row = (r) => Object.assign({ id: r[0], state: r[1], ev: r[2], sel: !!r[3], bg: r[3] ? '#EDE9DF' : '#FFFFFF', fw: r[3] ? '600' : '400' }, st(r[1]));
+    const runs = [
+      { head: '28 Sep, 14:03 · panel · 1 case', id: 'dev-panel-4a7d20e1', rows: [['medqa-0002', 'running', 15]].map(row) },
+      { head: '27 Sep, 23:02 · single_doctor · 10 cases', id: 'dev-single_doctor-befc79ba', rows: [
+        ['medqa-0002', 'finalize', 21], ['medqa-0009', 'finalize', 15, true], ['medqa-0012', 'turn_cap', 68],
+        ['medqa-0017', 'no_new_actions', 27], ['medqa-0021', 'finalize', 18], ['medqa-0033', 'budget_exhausted', 40],
+        ['medqa-0038', 'parse_failure', 11], ['medqa-0041', 'provider_error', 9], ['medqa-0046', 'request_cap', 35],
+        ['medqa-0050', 'incomplete', 6]
+      ].map(row) }
+    ];
+    return { yes: true, msgs: msgs, turns: turns, key: key, runs: runs };
+  }
+}
+</script>
+</body>
+</html>

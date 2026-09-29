@@ -4,79 +4,95 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentClinic — encounter viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header>
+<div class="app">
+
+<header class="top">
   <div class="brand">
-    <h1>AgentClinic</h1>
-    <span class="sub">encounter viewer</span>
+    <span class="brand-glyphs" aria-hidden="true"><span class="g g-doctor"></span><span class="g g-patient"></span><span class="g g-gate"></span></span>
+    <span class="wordmark">AgentClinic</span>
+    <span class="brand-sub">encounter viewer</span>
   </div>
-  <div class="quota" id="quota" title="OpenRouter free-tier daily allowance"></div>
+  <div class="keyline"><span class="keytag" id="keyTag" hidden></span><span id="keyLine"></span></div>
 </header>
 
-<p class="disclaimer" id="disclaimer">
-  Educational simulation only. Not medical advice.
-</p>
+<div class="disclaimer" role="note">
+  <span class="info" aria-hidden="true">i</span>
+  <p id="disclaimer"><strong>Educational simulation only.</strong> Not medical advice.</p>
+</div>
 
-<main>
-  <aside>
-    <section class="panel">
-      <h2>New encounter</h2>
-      <label for="case">Case</label>
-      <select id="case"></select>
-      <p class="objective" id="objective"></p>
-
-      <label for="config">Doctor configuration</label>
-      <select id="config">
-        <option value="panel">Panel — doctor, challenger, cost steward</option>
-        <option value="single_doctor">Single doctor</option>
-      </select>
-
-      <label for="turns">Max turns</label>
-      <input type="number" id="turns" value="20" min="1" max="20">
-
-      <button id="start">Start encounter</button>
-      <p class="cost-note" id="costNote"></p>
+<div class="body">
+  <aside class="sidebar">
+    <section class="new">
+      <h2 class="section-h">New encounter</h2>
+      <div class="field">
+        <label for="case">Case</label>
+        <div class="select"><select id="case"></select></div>
+        <p class="objective" id="objective"></p>
+      </div>
+      <div class="field">
+        <span class="label" id="cfgLabel">Doctor configuration</span>
+        <div class="segmented" role="group" aria-labelledby="cfgLabel">
+          <button type="button" data-config="panel" aria-pressed="true"><span>Panel</span><span class="sub">doctor, challenger, cost steward</span></button>
+          <button type="button" data-config="single_doctor" aria-pressed="false"><span>Single doctor</span></button>
+        </div>
+      </div>
+      <div class="field row">
+        <label for="turns">Max turns <span class="muted">1–20</span></label>
+        <input id="turns" type="number" min="1" max="20" value="20">
+      </div>
+      <div class="start">
+        <div class="start-row">
+          <button type="button" id="start" class="btn primary" aria-describedby="startReason">Start encounter</button>
+          <span class="start-inline" id="startInline"></span>
+        </div>
+        <div id="startReason" class="start-reason"></div>
+      </div>
     </section>
 
-    <section class="panel">
-      <h2>Replay a past run</h2>
-      <label for="modelFilter">Model</label>
-      <select id="modelFilter"></select>
-      <label for="runs">Run and case <span class="hint-inline">(latest first)</span></label>
-      <select id="runs"><option value="">—</option></select>
-      <button id="replay" class="secondary">Replay</button>
-      <p class="hint">Replays stream through the same channel as a live run, and cost nothing.</p>
-    </section>
-
-    <section class="panel reveal" id="revealPanel" hidden>
-      <h2>Ground truth</h2>
-      <p class="hint">Held back until the encounter ends, and served on a separate
-        channel that the transcript never touches.</p>
-      <button id="revealBtn" class="secondary">Reveal the answer</button>
-      <div id="revealBody" hidden></div>
+    <section class="replay">
+      <h2 class="section-h">Replay a past run</h2>
+      <div class="field">
+        <label for="modelFilter">Model</label>
+        <div class="select"><select id="modelFilter"></select></div>
+      </div>
+      <div class="runlist" id="runList" role="list" aria-label="Runs and cases, newest first"></div>
+      <div class="replay-foot">
+        <button type="button" id="replay" class="btn secondary" disabled>Replay</button>
+        <p class="hint">Replays stream through the same channel as a live run, and cost nothing.</p>
+      </div>
     </section>
   </aside>
 
-  <section class="stage">
-    <div class="statusbar">
-      <span class="dot" id="dot"></span>
-      <span id="status">Idle</span>
-      <span class="spacer"></span>
-      <span class="metric">turn <b id="turnNo">—</b></span>
-      <span class="metric"><b id="eventCount">0</b> events</span>
+  <main class="main">
+    <div class="statusbar" id="statusbar" role="status" aria-live="polite">
+      <span class="st-main"><span class="sg" id="stGlyph" aria-hidden="true"></span><span class="st-label" id="stLabel">Idle</span><span class="st-model" id="stModel"></span></span>
+      <span class="st-text" id="stText">nothing loaded</span>
+      <span class="counters"><span class="chip">turn <span id="turnNo">–</span></span><span class="chip"><span id="eventCount">0</span> events</span></span>
     </div>
-    <div id="transcript" class="transcript">
-      <div class="empty">
-        <p>Pick a case and start an encounter, or replay a past run.</p>
-        <p class="hint">The doctor cannot see the diagnosis. Neither can this page,
-          until the encounter is over.</p>
-      </div>
-    </div>
-  </section>
-</main>
 
+    <div class="stage">
+      <div class="transcript-wrap">
+        <div class="contextbar" id="contextBar" hidden></div>
+        <div class="transcript" id="transcript" tabindex="-1">
+          <div class="flow" id="flow"></div>
+        </div>
+        <button type="button" class="jump" id="jump" hidden>
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v10M3 8l4 4 4-4"/></svg>
+          <span id="jumpText">Jump to latest</span>
+        </button>
+      </div>
+      <aside class="rail" id="rail" aria-label="Turn index"></aside>
+    </div>
+  </main>
+</div>
+
+</div>
 <script src="app.js"></script>
 </body>
 </html>
